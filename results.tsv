@@ -1,0 +1,127 @@
+commit	val_bpb	memory_gb	status	description
+baseline	0.997900	44.0	keep	baseline
+bea057b	0.986041	43.9	keep	halve batch 524K to 262K (more steps in 5 min)
+7f2a65c	0.981773	60.2	keep	depth 9 aspect_ratio 57 (extra layer dim ~512)
+187e419	0.982603	60.2	discard	add 5% warmup
+4e6697f	0.981201	60.2	keep	warmdown 0.5 to 0.7
+8363d52	0.980903	60.2	keep	SSSSL window pattern (5:1 short:long)
+7da0b67	0.979969	60.2	keep	short window 1/8 context (256 tokens)
+59e9dd9	0.978784	60.2	keep	RoPE base frequency 10K to 200K
+7d047e4	0.975524	60.2	keep	embedding LR 0.6 to 0.8
+c4ce95c	0.975895	60.2	discard	unembedding LR 0.004 to 0.008
+0640555	0.974729	60.2	keep	x0_lambda init 0.1 to 0.05
+772dada	0.974119	60.2	keep	FINAL_LR_FRAC 0.0 to 0.05
+ccf6012	0.974903	60.2	discard	matrix LR 0.04 to 0.045
+aa8f408	0.973104	60.2	keep	unembedding LR 0.004 to 0.006
+889dbed	0.973799	60.2	discard	random seed 42 to 137
+e05a87d	0.000000	0.0	crash	batch 131K (assert fail: not divisible by device batch)
+0dc6130	0.974134	60.2	discard	embedding LR 0.8 to 1.0
+fa14910	0.973824	60.2	discard	softcap 15 to 20
+187db84	0.973659	60.2	discard	warmdown 0.7 to 0.8
+3ec9cfa	0.979340	53.7	discard	depth 10 aspect 51 dim 512 (too narrow)
+2913af9	0.973177	60.2	discard	weight decay 0.2 to 0.15
+a7aa309	0.972849	60.2	keep	muon momentum warmup 300 to 200 steps
+6b6b241	0.973385	60.2	discard	VE gate channels 32 to 48
+77d7a47	0.973121	60.2	discard	scalar LR 0.5 to 0.3
+d6cad11	0.973130	60.2	discard	Adam beta1 0.8 to 0.85
+b19f649	0.978313	60.2	discard	remove cautious WD mask (much worse)
+9aa1e29	0.974490	60.2	discard	FINAL_LR_FRAC 0.05 to 0.1
+aa61e0b	0.973658	60.2	discard	gradient clipping max_norm=1.0
+31b838e	0.973706	60.2	discard	Muon ns_steps 5 to 4
+ebff004	0.973076	60.2	discard	LR scale reference 768 to 640
+d3c7143	0.973339	60.2	discard	muon final momentum 0.95 to 0.96
+a6b2ac7	0.973119	60.2	discard	Muon beta2 0.95 to 0.90
+6b59591	0.972821	60.2	discard	VE gate scale 2 to 3 (flat)
+d41c1df	0.976114	60.2	discard	resid lambda init 1.0 to 0.9
+97aa364	0.973828	60.2	discard	matrix LR 0.04 to 0.035
+5db6ed4	0.979735	59.5	discard	VE only last 3 layers (much worse)
+8189d27	0.973894	60.2	discard	embedding LR 0.8 to 0.9
+7f63c17	0.972779	60.2	keep	unembedding LR 0.006 to 0.005
+d0662d1	0.974038	60.2	discard	RoPE base 200K to 400K
+d3840ec	0.974356	60.2	discard	constant WD at 0.1 (decaying better)
+264a05b	0.972694	60.2	keep	add WD 0.01 to lm_head
+7d3f0e4	0.972847	60.2	discard	softcap 15 to 13
+00a7c09	0.979754	72.6	discard	depth 11 dim 640 (too big, too few steps)
+674a510	0.975033	60.2	discard	add WD 0.01 to embeddings (hurts)
+b1f02f7	0.975328	60.2	discard	add 2% warmup (any warmup hurts)
+81261f5	0.973469	60.2	discard	halve value embedding LR
+51f0499	0.972844	60.2	discard	x0_lambda beta1 0.96 to 0.90
+de48b64	0.974912	60.2	discard	SSSL pattern (more long layers hurt steps)
+01a3c69	0.973105	60.2	discard	FINAL_LR_FRAC 0.05 to 0.02
+86c7e66	0.974639	60.2	discard	lm_head init std 0.001 to 0.01
+489bb99	0.976462	60.2	discard	x0_lambda init 0.0 (x0 skip important)
+a16391b	0.973059	60.2	discard	rotary precompute 10x to 2x
+8dd93ec	0.972712	60.2	discard	VE LR 1.5x (flat)
+802d184	0.974123	60.2	discard	embedding init std 1.0 to 2.0
+2b9a688	0.974331	60.2	discard	sqrt WD schedule
+ffcb3c2	0.972982	60.2	discard	muon start momentum 0.85 to 0.80
+3cde993	0.974655	66.2	discard	depth 10 same dim 640 (too few steps)
+8be9036	0.975285	53.9	discard	depth 8 dim 640 (too shallow)
+2271cc2	0.974190	60.2	discard	WD follows LR schedule
+46cf5f2	0.983719	54.6	discard	parallel attn+MLP (much worse)
+59316b9	0.973312	60.2	discard	warmdown 0.7 to 0.65
+c4b0731	0.973803	57.4	discard	MLP hidden 4x to 3.5x
+6193116	0.973173	60.2	discard	RoPE base 200K to 150K
+c1f79a6	0.973005	60.2	discard	FINAL_LR_FRAC 0.05 to 0.03
+ee60bf7	0.976203	60.2	discard	SSSSSL pattern (too few long layers)
+a7b953a	0.973088	60.2	discard	lm_head WD 0.01 to 0.05
+41d50a8	0.972258	60.2	keep	reduce transformer init scale by 0.8x
+991abb2	0.972721	60.2	discard	init scale 0.6x (0.8 better)
+f5979a7	0.972128	60.2	keep	init scale 0.7x
+2216fd6	0.973025	60.2	discard	init scale 0.65x (0.7 better)
+ddcd35a	0.972587	60.2	discard	embedding init std 1.0 to 0.7
+8934eec	0.972776	60.2	discard	lm_head init std 0.001 to 0.002
+92b4765	0.973847	60.2	discard	small random init for c_proj (worse)
+d385aa7	0.972901	60.2	discard	scalar LR 0.5 to 0.7
+db37d12	0.973155	60.2	discard	unembedding LR 0.005 to 0.004
+f04daec	0.973155	60.2	discard	weight decay 0.2 to 0.25
+d931c3a	0.975790	60.2	discard	x0_lambda init 0.05 to 0.04 (worse)
+c5a4645	0.972216	60.2	discard	VE init scale 0.5x of transformer init
+30f1b8d	0.973361	60.2	discard	cosine warmdown schedule (linear better)
+5a9c951	0.972877	63.1	discard	MLP hidden 4x to 4.5x (fewer steps)
+ab8f970	0.975964	60.2	discard	decreasing resid_lambda init (hurts)
+2a3f587	0.972901	60.2	discard	softcap 15 to 14
+362937e	0.972495	60.2	discard	VE gate channels 32 to 16
+0d77d4d	0.972621	60.2	discard	Adam beta2 0.95 to 0.99
+4eebd43	0.973493	60.2	discard	x0_lambda LR 2x
+b85567f	0.979987	52.0	discard	multi-query attention n_kv_head=1 (too few KV heads)
+0da44e6	0.973545	60.2	discard	small nonzero init for c_proj (zero better)
+d6c139a	0.973831	60.2	discard	embedding init std 1.0 to 0.5
+d70987b	3.215849	60.2	discard	weight tying (shared embed/unembed, broken)
+bff5cda	0.975852	59.5	discard	VE every 3rd layer (too few VEs)
+5953d58	0.973423	60.2	discard	WD constant until warmdown then decay
+d1eb994	0.974314	60.2	discard	smaller QK init 0.5x (uniform init matters for Muon)
+3c19fba	0.974046	60.2	discard	depth-dependent init scale 1/sqrt(layer+1)
+119065a	0.972335	60.2	discard	init scale 0.7 to 0.72
+97dda85	0.972097	60.2	keep	init scale 0.7 to 0.68
+58b8b7a	0.972350	60.2	discard	init scale 0.68 to 0.66 (0.68 better)
+70c2737	0.972731	60.2	discard	Muon NorMuon beta2 0.95 to 0.98
+8232e01	0.973000	60.2	discard	resid_lambda LR 0.01x to 0.04x
+21389c4	0.973723	60.2	discard	Adam beta1 0.8 to 0.9
+e4c0f3e	0.974043	60.2	discard	short window 1/6 context (slower)
+2e2a2f8	0.972632	60.2	discard	short window 1/10 context (quality loss)
+9db7b86	0.972744	60.2	discard	lm_head init std 0.001 to 0.0005
+ece9101	0.972009	60.2	keep	tiny embedding WD 0.001
+b07c56b	0.972438	60.2	discard	embedding WD 0.001 to 0.002
+1a85362	0.971058	60.2	keep	tiny VE WD 0.001
+73c77ca	0.970655	60.2	keep	VE WD 0.001 to 0.002
+637f82f	0.970433	60.2	keep	VE WD 0.002 to 0.003
+c152812	0.970644	60.2	discard	VE WD 0.003 to 0.005 (0.003 better)
+efd2171	0.970703	60.2	discard	embedding WD 0.001 to 0.002
+328de7c	0.970612	60.2	discard	lm_head WD 0.01 to 0.02
+c0c2349	0.970758	60.2	discard	lm_head WD 0.01 to 0.005
+b1d5004	0.969952	60.2	keep	embedding LR 0.8 to 0.9 (with WD)
+2ca8872	0.970767	60.2	discard	embedding LR 0.9 to 1.0
+74a3b33	0.970759	60.2	discard	unembedding LR 0.005 to 0.006
+d1f68da	0.970106	60.2	discard	embedding WD 0.001 to 0.002 (with LR 0.9)
+ebbe8c0	0.971004	60.2	discard	matrix LR 0.04 to 0.045
+b9ee7d6	0.970040	60.2	discard	VE WD 0.003 to 0.004
+2f0a8ec	0.970573	60.2	discard	Muon WD 0.2 to 0.22
+438a26e	0.969686	60.2	keep	warmdown 0.7 to 0.75
+d9322b9	0.970244	60.2	discard	warmdown 0.75 to 0.8
+8876cf3	0.969714	60.2	discard	FINAL_LR_FRAC 0.05 to 0.03
+80330e2	0.970135	60.2	discard	x0_lambda init 0.05 to 0.06
+2f0cec6	0.970678	60.2	discard	RoPE base 200K to 300K
+c044a14	0.970212	60.2	discard	VE gate scale 2 to 3
+80a519a	0.969857	60.2	discard	VE LR 1.5x with WD
+a6b6476	0.970286	60.2	discard	muon momentum warmup 200 to 150 steps

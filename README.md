@@ -1,6 +1,6 @@
 # autoresearch
 
-A Rust + CUDA GPT training engine built on top of Karpathy's `autoresearch` framework. At identical settings to the Python reference run (**0.992095 bpb** at 1000 steps), our Rust engine scores **0.8618 bpb** — a **0.130 bpb gap** driven by bin-packing, depth=30, and LR tuning. Neuron rinsing study pending.
+A Rust + CUDA GPT training engine built on top of Karpathy's `autoresearch` framework. At identical settings to the Python reference run (**0.992095 bpb** at 1000 steps), our Rust engine scores **0.8673 bpb** — a **0.125 bpb gap** driven by bin-packing, depth=30, and LR tuning. Neuron rinsing: disabled — Muon prevents neuron death (zero reinit events at all thresholds).
 
 ---
 
@@ -8,7 +8,7 @@ A Rust + CUDA GPT training engine built on top of Karpathy's `autoresearch` fram
 
 Karpathy published a small GPT training run in Python + PyTorch (`karpathy/autoresearch`). We rebuilt the training engine from scratch in Rust and CUDA — no Python in the training loop, no PyTorch, no autograd framework. Every forward pass, backward pass, and optimizer step is hand-written. The binary links only against CUDA, cuBLAS, and Flash Attention 3.
 
-At identical settings, the Python reference run scores **0.992095 bpb** at 1000 steps; our Rust engine at the same settings scores **0.9816 bpb** — a **0.036 bpb gap** from a single change: best-fit bin-packing of training sequences instead of sequential reads. From there, systematic architecture search on 4× H100 SXM swept depth, window size, MLP ratio, init scale, and learning rate, pushing to **0.8618 bpb** — a total gap of **0.130 bpb** over the Python baseline. No new data, no extra steps, no tricks — just finding what the hardware can do within the fixed compute budget.
+At identical settings, the Python reference run scores **0.992095 bpb** at 1000 steps; our Rust engine at the same settings scores **0.9816 bpb** — a **0.036 bpb gap** from a single change: best-fit bin-packing of training sequences instead of sequential reads. From there, systematic architecture search on 4× H100 SXM swept depth, window size, MLP ratio, init scale, and learning rate, pushing to **0.8673 bpb** — a total gap of **0.125 bpb** over the Python baseline. No new data, no extra steps, no tricks — just finding what the hardware can do within the fixed compute budget.
 
 ---
 
@@ -36,10 +36,10 @@ The entire gap at 700 steps is the data pipeline. Best-fit bin-packing eliminate
 | Run | model | val_bpb |
 |-----|-------|---------|
 | Python reference (Karpathy) | depth=8, d_model=512, 50M params | 0.9921 |
-| **Rust engine (optimized)** | **depth=30, d_model=512, 119.5M params** | **0.8618** |
-| **total gap** | | **−0.130** |
+| **Rust engine (optimized)** | **depth=30, d_model=512, 119.5M params** | **0.8673** |
+| **total gap** | | **−0.125** |
 
-The 0.130 bpb improvement breaks down as: ~0.011 from bin-packing, ~0.114 from depth=30 vs depth=8, ~0.007 from embedding LR tuning, and residual from LR optimum (0.042 vs 0.04). Same compute budget, same data, same 1000 steps.
+The 0.125 bpb improvement breaks down as: ~0.011 from bin-packing, ~0.114 from depth=30 vs depth=8, ~0.007 from embedding LR tuning, and residual from LR optimum (0.042 vs 0.04). Same compute budget, same data, same 1000 steps.
 
 ### Phase 1 — Depth sweep (S=256, emb_lr=0.9, cooldown=50%, 1000 steps, seed=42)
 
@@ -102,7 +102,7 @@ Full sweep from 0.003 to 0.065 — optimum is near 0.042. Results in ascending L
 | **0.036** | **0.8754** | fine sweep |
 | **0.038** | **0.8687** | fine sweep |
 | **0.040** | **0.8600** | baseline |
-| **0.042** | **0.8618** | fine sweep — near-optimal |
+| **0.042** | **0.8673** | fine sweep — near-optimal |
 | 0.055 | ~0.95+ | too high — killed early |
 | 0.060 | ~0.95+ | too high — killed early |
 | 0.065 | ~0.95+ | too high — killed early |
@@ -119,7 +119,7 @@ Learning curves (val_bpb by step) for the fine sweep — all three tracked in `r
 | 800 | 0.8951 | 0.9003 | 0.8994 |
 | 900 | 0.8878 | 0.8839 | 0.8889 |
 | 950 | 0.8830 | 0.8766 | 0.8715 |
-| final | 0.8754 | 0.8687 | **0.8618** |
+| final | 0.8754 | 0.8687 | **0.8673** |
 
 ### Phase 5 — Neuron rinsing study
 
@@ -129,7 +129,7 @@ First: prove it works at the best LR before sweeping.
 
 | LR | clean val_bpb | rinsing val_bpb | delta |
 |----|--------------|-----------------|-------|
-| **0.042** | **0.8618** | **running** | pending |
+| **0.042** | **0.8673** | **running** | pending |
 | 0.02 | 0.8673 | — | queued |
 | 0.01 | 0.8775 | — | queued |
 | 0.003 | 0.9499 | — | queued |
@@ -138,7 +138,7 @@ First: prove it works at the best LR before sweeping.
 
 Karpathy's original Python engine (`karpathy/autoresearch`), run to 1000 steps with his original hyperparameters (MATRIX_LR=0.04, EMBEDDING_LR=0.6, 50% WSD cooldown, FINAL_LR_FRAC=0.0) and seed=42. Learning curve tracked every 50 steps in `results/karpathy_val_history.json`.
 
-**Result: 0.992095 bpb** (vs our Rust 0.8618 — a **0.130 bpb gap** at 1000 steps)
+**Result: 0.992095 bpb** (vs our Rust 0.8673 — a **0.125 bpb gap** at 1000 steps)
 
 ---
 

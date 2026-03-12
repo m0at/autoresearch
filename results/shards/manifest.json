@@ -1,9 +1,0 @@
-{
-  "vocab_size": 8192,
-  "seq_len": 2049,
-  "rows_per_shard": 1000,
-  "num_shards": 2669,
-  "total_rows": 2668226,
-  "total_docs": 8545280,
-  "tokenizer_hash": "0e3ab82f8f7636de"
-}

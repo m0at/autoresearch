@@ -31,10 +31,14 @@ hpc/.deploy_state
 hpc/.deploy_state.done
 hpc/.state/
 
-# Model weights and checkpoints (non-LFS)
+# Model weights, checkpoints, training data — download/generate locally
 *.ckpt
+*.safetensors
 results/*.log
 results/*.jsonl
+results/shards/
+results/checkpoints/
+prebuilt/
 
 # Compiled Metal shaders
 *.air

@@ -1,0 +1,9 @@
+id = "AR-0003"
+title = "Engine correctness: sliding window edge cases"
+status = "open"
+priority = "p2"
+assignee = "opus-a"
+labels = []
+description = ""
+created_unix_s = 1773187461
+updated_unix_s = 1773187461

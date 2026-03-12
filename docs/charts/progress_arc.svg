@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400" viewBox="0 0 800 400">
+  <style>
+    text { font-family: system-ui, -apple-system, sans-serif; }
+    .title { font-size: 15px; font-weight: 600; fill: #111827; }
+    .axis-label { font-size: 11px; fill: #6b7280; }
+    .bar-label { font-size: 10px; fill: #374151; }
+    .bar-value { font-size: 10.5px; font-weight: 600; }
+    .grid { stroke: #e5e7eb; stroke-width: 1; }
+    .baseline-label { font-size: 11px; fill: #7c3aed; font-weight: 600; }
+    .legend-text { font-size: 11px; fill: #374151; }
+  </style>
+
+  <!-- Background -->
+  <rect width="800" height="400" fill="white" rx="8"/>
+
+  <!-- Title -->
+  <text x="400" y="28" text-anchor="middle" class="title">val_bpb improvement arc — candle to beating Karpathy</text>
+
+  <!-- Chart area: x=140..780, y=50..330 -->
+  <!-- Y axis: 0.95 (top) to 1.75 (bottom) -->
+  <!-- range = 0.80, height = 280px, scale = 280/0.80 = 350 px per unit -->
+
+  <!-- Grid lines -->
+  <!-- y=1.75 → 50+0=50; y=1.5 → 50+87.5=137.5; y=1.25→50+175=225; y=1.0→50+262.5=312.5 -->
+  <line x1="140" y1="50" x2="780" y2="50" class="grid"/>
+  <line x1="140" y1="137" x2="780" y2="137" class="grid"/>
+  <line x1="140" y1="225" x2="780" y2="225" class="grid"/>
+  <line x1="140" y1="313" x2="780" y2="313" class="grid"/>
+
+  <!-- Y axis labels -->
+  <text x="130" y="54" text-anchor="end" class="axis-label">1.75</text>
+  <text x="130" y="141" text-anchor="end" class="axis-label">1.50</text>
+  <text x="130" y="229" text-anchor="end" class="axis-label">1.25</text>
+  <text x="130" y="317" text-anchor="end" class="axis-label">1.00</text>
+
+  <!-- Y axis title -->
+  <text transform="translate(18,200) rotate(-90)" text-anchor="middle" class="axis-label">val_bpb (lower is better)</text>
+
+  <!-- Vertical axis line -->
+  <line x1="140" y1="50" x2="140" y2="330" stroke="#d1d5db" stroke-width="1.5"/>
+  <line x1="140" y1="330" x2="780" y2="330" stroke="#d1d5db" stroke-width="1.5"/>
+
+  <!-- Karpathy baseline: 0.998 → y = 50 + (1.75-0.998)*350 = 50 + 263.2 = 313.2 ≈ 313 -->
+  <line x1="140" y1="313" x2="780" y2="313" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="784" y="317" class="baseline-label">0.998</text>
+
+  <!-- Bar definitions:
+       Each bar spans from its val_bpb down to (or conceptually represents) the value.
+       We draw bars from bottom (y=330) up to the value's y-position.
+       y_bar = 50 + (1.75 - val) * 350
+
+       Milestones and colors:
+       1. Candle framework:          1.70  → y=50+(0.05*350)=67.5    red
+       2. Custom engine (bugs):      1.1296→ y=50+(0.6204*350)=267.1 orange/red
+       3. All bugs fixed:            1.0567→ y=50+(0.6933*350)=292.7 blue
+       4. + Winning recipe:          1.0494→ y=50+(0.7006*350)=295.2 blue
+       5. + Best-fit packing:        1.0084→ y=50+(0.7416*350)=309.6 blue
+       6. + Doubled batch:           0.9907→ y=50+(0.7593*350)=315.8 green (below baseline!)
+
+       Bar width: 7 bars across 640px → ~80px wide, 8px gap
+       Bar x positions (center): 140 + 40 + i*91 + 40
+  -->
+
+  <!-- Helper: bar bottom is y=330, bar top is y_val -->
+
+  <!-- Bar 1: Candle — 1.70 — red -->
+  <!-- y_top = 50 + (1.75-1.70)*350 = 50+17.5 = 67.5 -->
+  <rect x="148" y="68" width="72" height="262" fill="#dc2626" rx="3" opacity="0.85"/>
+  <text x="184" y="64" text-anchor="middle" class="bar-value" fill="#dc2626">1.700</text>
+  <text x="184" y="348" text-anchor="middle" class="bar-label">Candle</text>
+  <text x="184" y="360" text-anchor="middle" class="bar-label">framework</text>
+
+  <!-- Bar 2: Custom engine raw — 1.1296 — orange -->
+  <!-- y_top = 50 + (1.75-1.1296)*350 = 50+217.2 = 267.2 -->
+  <rect x="239" y="267" width="72" height="63" fill="#f97316" rx="3" opacity="0.85"/>
+  <text x="275" y="262" text-anchor="middle" class="bar-value" fill="#f97316">1.130</text>
+  <text x="275" y="348" text-anchor="middle" class="bar-label">Custom</text>
+  <text x="275" y="360" text-anchor="middle" class="bar-label">engine (raw)</text>
+
+  <!-- Bar 3: Bugs fixed — 1.0567 — blue -->
+  <!-- y_top = 50 + (1.75-1.0567)*350 = 50+242.7 = 292.7 -->
+  <rect x="330" y="293" width="72" height="37" fill="#2563eb" rx="3" opacity="0.85"/>
+  <text x="366" y="288" text-anchor="middle" class="bar-value" fill="#2563eb">1.057</text>
+  <text x="366" y="348" text-anchor="middle" class="bar-label">20 bugs</text>
+  <text x="366" y="360" text-anchor="middle" class="bar-label">fixed</text>
+
+  <!-- Bar 4: Winning recipe — 1.0494 — blue -->
+  <!-- y_top = 50 + (1.75-1.0494)*350 = 50+245.2 = 295.2 -->
+  <rect x="421" y="295" width="72" height="35" fill="#2563eb" rx="3" opacity="0.85"/>
+  <text x="457" y="290" text-anchor="middle" class="bar-value" fill="#2563eb">1.049</text>
+  <text x="457" y="348" text-anchor="middle" class="bar-label">+ winning</text>
+  <text x="457" y="360" text-anchor="middle" class="bar-label">recipe</text>
+
+  <!-- Bar 5: Best-fit packing — 1.0084 — blue -->
+  <!-- y_top = 50 + (1.75-1.0084)*350 = 50+259.6 = 309.6 -->
+  <rect x="512" y="310" width="72" height="20" fill="#2563eb" rx="3" opacity="0.85"/>
+  <text x="548" y="305" text-anchor="middle" class="bar-value" fill="#2563eb">1.008</text>
+  <text x="548" y="348" text-anchor="middle" class="bar-label">+ best-fit</text>
+  <text x="548" y="360" text-anchor="middle" class="bar-label">packing</text>
+
+  <!-- Bar 6: Doubled batch — 0.9907 — green — goes below baseline -->
+  <!-- y_top = 50 + (1.75-0.9907)*350 = 50+265.8 = 315.8 -->
+  <rect x="603" y="316" width="72" height="14" fill="#16a34a" rx="3" opacity="0.9"/>
+  <text x="639" y="311" text-anchor="middle" class="bar-value" fill="#16a34a">0.991</text>
+  <text x="639" y="348" text-anchor="middle" class="bar-label">+ 2× batch</text>
+  <text x="639" y="360" text-anchor="middle" class="bar-label">(final)</text>
+
+  <!-- Legend -->
+  <rect x="148" y="376" width="12" height="12" fill="#dc2626" rx="2" opacity="0.85"/>
+  <text x="164" y="387" class="legend-text">Problem / dead end</text>
+  <rect x="290" y="376" width="12" height="12" fill="#f97316" rx="2" opacity="0.85"/>
+  <text x="306" y="387" class="legend-text">Intermediate</text>
+  <rect x="410" y="376" width="12" height="12" fill="#2563eb" rx="2" opacity="0.85"/>
+  <text x="426" y="387" class="legend-text">Improvement</text>
+  <rect x="519" y="376" width="12" height="12" fill="#16a34a" rx="2" opacity="0.9"/>
+  <text x="535" y="387" class="legend-text">Final result (beats baseline)</text>
+  <line x1="680" y1="381" x2="700" y2="381" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="704" y="385" class="legend-text">Karpathy 0.998</text>
+</svg>

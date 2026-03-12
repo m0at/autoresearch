@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="360" viewBox="0 0 700 360">
+  <style>
+    text { font-family: system-ui, -apple-system, sans-serif; }
+    .title { font-size: 14px; font-weight: 600; fill: #111827; }
+    .axis-label { font-size: 11px; fill: #6b7280; }
+    .bar-label { font-size: 11px; fill: #374151; }
+    .bar-value { font-size: 10px; font-weight: 600; }
+    .grid { stroke: #e5e7eb; stroke-width: 1; }
+    .baseline-label { font-size: 10.5px; fill: #7c3aed; font-weight: 600; }
+    .legend-text { font-size: 11px; fill: #374151; }
+    .pending-text { font-size: 10px; fill: #9ca3af; font-weight: 500; }
+  </style>
+
+  <rect width="700" height="360" fill="white" rx="8"/>
+
+  <!-- Title -->
+  <text x="350" y="26" text-anchor="middle" class="title">Step-generalization benchmark: Python vs Engine</text>
+
+  <!-- Chart area: x=80..660, y=45..280 -->
+  <!-- Y axis: 0.95 to 1.10, range=0.15, height=235px, scale=235/0.15=1566.7 px/unit -->
+
+  <!-- Grid lines: 0.95, 1.00, 1.05, 1.10 -->
+  <!-- y=0.95 → 45; y=1.00 → 45+(0.05*1566.7)=45+78.3=123.3; y=1.05→45+156.7=201.7; y=1.10→45+235=280 -->
+  <line x1="80" y1="45" x2="660" y2="45" class="grid"/>
+  <line x1="80" y1="123" x2="660" y2="123" class="grid"/>
+  <line x1="80" y1="202" x2="660" y2="202" class="grid"/>
+  <line x1="80" y1="280" x2="660" y2="280" class="grid"/>
+
+  <!-- Y axis labels -->
+  <text x="72" y="49" text-anchor="end" class="axis-label">1.10</text>
+  <text x="72" y="127" text-anchor="end" class="axis-label">1.05</text>
+  <text x="72" y="206" text-anchor="end" class="axis-label">1.00</text>
+  <text x="72" y="284" text-anchor="end" class="axis-label">0.95</text>
+
+  <!-- Axis -->
+  <line x1="80" y1="45" x2="80" y2="280" stroke="#d1d5db" stroke-width="1.5"/>
+  <line x1="80" y1="280" x2="660" y2="280" stroke="#d1d5db" stroke-width="1.5"/>
+
+  <!-- Y axis title -->
+  <text transform="translate(16,165) rotate(-90)" text-anchor="middle" class="axis-label">val_bpb (lower is better)</text>
+
+  <!-- X axis title -->
+  <text x="370" y="310" text-anchor="middle" class="axis-label">Optimizer Steps</text>
+
+  <!-- Karpathy baseline: 0.998 → y = 45 + (1.10-0.998)*1566.7 = 45+159.8 = 204.8 ≈ 205 -->
+  <line x1="80" y1="205" x2="660" y2="205" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="664" y="209" class="baseline-label">0.998</text>
+
+  <!--
+    Groups at steps 700, 1000, 1500
+    X positions for group centers: 185, 370, 555
+    Bar width: 40px each, gap 8px between pair, group gap 8px each side
+    Python (gray): center-24 to center-4
+    Engine (blue): center+4 to center+44
+
+    val_bpb y formula: y = 45 + (1.10 - val) * 1566.7
+
+    Step 700:
+      Python 1.0166 → y = 45 + (0.0834*1566.7) = 45+130.7 = 175.7 → bar from 175.7 to 280, h=104.3
+      Engine 0.9907 → y = 45 + (0.1093*1566.7) = 45+171.2 = 216.2 → bar from 216.2 to 280, h=63.8
+        Wait, engine is BELOW baseline (0.9907 < 0.998), so bar top is below baseline line.
+        y = 45 + (1.10-0.9907)*1566.7 = 45+171.2=216.2, height=280-216.2=63.8
+
+    Step 1000, 1500: pending — use placeholder gray bar from 0.95 to 1.10 (full) with dashes
+      Show gray bar spanning full chart with dashed outline
+  -->
+
+  <!-- ===== Step 700 ===== -->
+  <!-- Python bar: x=161, w=40, y=176, h=104 -->
+  <rect x="161" y="176" width="40" height="104" fill="#9ca3af" rx="3" opacity="0.85"/>
+  <text x="181" y="171" text-anchor="middle" class="bar-value" fill="#6b7280">1.0166</text>
+
+  <!-- Engine bar: x=209, w=40, y=216, h=64 -->
+  <rect x="209" y="216" width="40" height="64" fill="#2563eb" rx="3" opacity="0.9"/>
+  <text x="229" y="211" text-anchor="middle" class="bar-value" fill="#2563eb">0.9907</text>
+
+  <!-- Step 700 label -->
+  <text x="205" y="297" text-anchor="middle" class="bar-label">700</text>
+
+  <!-- ===== Step 1000 ===== -->
+  <!-- pending: light gray bars with dashed outline -->
+  <rect x="346" y="45" width="40" height="235" fill="#f3f4f6" rx="3" stroke="#d1d5db" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="366" y="168" text-anchor="middle" class="pending-text">pending</text>
+
+  <rect x="394" y="45" width="40" height="235" fill="#eff6ff" rx="3" stroke="#93c5fd" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="414" y="168" text-anchor="middle" class="pending-text">pending</text>
+
+  <text x="390" y="297" text-anchor="middle" class="bar-label">1000</text>
+
+  <!-- ===== Step 1500 ===== -->
+  <rect x="531" y="45" width="40" height="235" fill="#f3f4f6" rx="3" stroke="#d1d5db" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="551" y="168" text-anchor="middle" class="pending-text">pending</text>
+
+  <rect x="579" y="45" width="40" height="235" fill="#eff6ff" rx="3" stroke="#93c5fd" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="599" y="168" text-anchor="middle" class="pending-text">pending</text>
+
+  <text x="575" y="297" text-anchor="middle" class="bar-label">1500</text>
+
+  <!-- Legend -->
+  <rect x="100" y="325" width="14" height="14" fill="#9ca3af" rx="2" opacity="0.85"/>
+  <text x="118" y="337" class="legend-text">Python reference</text>
+
+  <rect x="230" y="325" width="14" height="14" fill="#2563eb" rx="2" opacity="0.9"/>
+  <text x="248" y="337" class="legend-text">Rust engine</text>
+
+  <rect x="330" y="325" width="14" height="14" fill="#f3f4f6" rx="2" stroke="#d1d5db" stroke-width="1.5" stroke-dasharray="3,2"/>
+  <text x="348" y="337" class="legend-text">Pending run</text>
+
+  <line x1="440" y1="331" x2="462" y2="331" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="466" y="336" class="legend-text">Karpathy baseline (0.998)</text>
+</svg>

@@ -1,0 +1,349 @@
+#include <cuda_bf16.h>
+#include <cuda_runtime.h>
+#include <math_constants.h>
+#include <stdint.h>
+
+// ── Warp reduction ──────────────────────────────────────────────────────────
+__device__ __forceinline__ float warp_reduce_sum_fnr(float val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1)
+        val += __shfl_xor_sync(0xffffffff, val, offset);
+    return val;
+}
+
+// =============================================================================
+// FUSION 1: fused_residual_add_rms_norm_fwd  (warp-per-row)
+//
+// x[row] += proj[row];  y[row] = rms_norm(x[row])
+// Each warp processes one row. No shared memory. D values cached in registers.
+// =============================================================================
+
+__global__ void fused_residual_add_rms_norm_fwd_kernel(
+    __nv_bfloat16* __restrict__ x,
+    const __nv_bfloat16* __restrict__ proj,
+    __nv_bfloat16* __restrict__ y,
+    uint32_t rows, uint32_t D, float eps)
+{
+    uint32_t lane = threadIdx.x & 31;
+    uint32_t warp_id = threadIdx.x >> 5;
+    uint32_t warps_per_block = blockDim.x >> 5;
+    uint32_t row = blockIdx.x * warps_per_block + warp_id;
+    if (row >= rows) return;
+
+    __nv_bfloat16* xr = x + (uint64_t)row * D;
+    const __nv_bfloat16* pr = proj + (uint64_t)row * D;
+    __nv_bfloat16* yr = y + (uint64_t)row * D;
+
+    // Pass 1: compute x += proj and accumulate sum_sq
+    float local_sq = 0.0f;
+    for (uint32_t i = lane; i < D; i += 32) {
+        float xi = __bfloat162float(xr[i]) + __bfloat162float(pr[i]);
+        xr[i] = __float2bfloat16(xi);  // write updated x
+        local_sq += xi * xi;
+    }
+    float sum_sq = warp_reduce_sum_fnr(local_sq);
+    float rrms = rsqrtf(sum_sq / (float)D + eps);
+
+    // Pass 2: write normed output (x re-read from L1 cache)
+    for (uint32_t i = lane; i < D; i += 32) {
+        yr[i] = __float2bfloat16(__bfloat162float(xr[i]) * rrms);
+    }
+}
+
+extern "C" void fused_residual_add_rms_norm_fwd(
+    void* x, const void* proj, void* y,
+    uint32_t rows, uint32_t D, float eps, cudaStream_t stream)
+{
+    uint32_t warps_per_block = 8;
+    uint32_t threads = warps_per_block * 32;
+    uint32_t blocks = (rows + warps_per_block - 1) / warps_per_block;
+    fused_residual_add_rms_norm_fwd_kernel<<<blocks, threads, 0, stream>>>(
+        (__nv_bfloat16*)x, (const __nv_bfloat16*)proj, (__nv_bfloat16*)y,
+        rows, D, eps);
+}
+
+// =============================================================================
+// FUSION 2: fused_rms_norm_bwd_residual_add  (warp-per-row)
+//
+// d_x += rms_norm_bwd(x_pre_norm, grad_out)
+// =============================================================================
+
+__global__ void fused_rms_norm_bwd_residual_add_kernel(
+    const __nv_bfloat16* __restrict__ x,
+    const __nv_bfloat16* __restrict__ grad_out,
+    __nv_bfloat16* __restrict__ d_x,
+    uint32_t rows, uint32_t D, float eps)
+{
+    uint32_t lane = threadIdx.x & 31;
+    uint32_t warp_id = threadIdx.x >> 5;
+    uint32_t warps_per_block = blockDim.x >> 5;
+    uint32_t row = blockIdx.x * warps_per_block + warp_id;
+    if (row >= rows) return;
+
+    const __nv_bfloat16* xr  = x        + (uint64_t)row * D;
+    const __nv_bfloat16* gor = grad_out + (uint64_t)row * D;
+    __nv_bfloat16* dxr       = d_x      + (uint64_t)row * D;
+
+    float local_sq  = 0.0f;
+    float local_dot = 0.0f;
+    for (uint32_t i = lane; i < D; i += 32) {
+        float xi = __bfloat162float(xr[i]);
+        float gi = __bfloat162float(gor[i]);
+        local_sq  += xi * xi;
+        local_dot += gi * xi;
+    }
+    float sum_sq = warp_reduce_sum_fnr(local_sq);
+    float dot_gx = warp_reduce_sum_fnr(local_dot);
+
+    float rrms  = rsqrtf(sum_sq / (float)D + eps);
+    float coeff = dot_gx / (float)D * rrms * rrms;
+
+    for (uint32_t i = lane; i < D; i += 32) {
+        float xi = __bfloat162float(xr[i]);
+        float gi = __bfloat162float(gor[i]);
+        float norm_grad = rrms * (gi - xi * coeff);
+        float dx_old = __bfloat162float(dxr[i]);
+        dxr[i] = __float2bfloat16(dx_old + norm_grad);
+    }
+}
+
+extern "C" void fused_rms_norm_bwd_residual_add(
+    const void* x, const void* grad_out, void* d_x,
+    uint32_t rows, uint32_t D, float eps, cudaStream_t stream)
+{
+    uint32_t warps_per_block = 8;
+    uint32_t threads = warps_per_block * 32;
+    uint32_t blocks = (rows + warps_per_block - 1) / warps_per_block;
+    fused_rms_norm_bwd_residual_add_kernel<<<blocks, threads, 0, stream>>>(
+        (const __nv_bfloat16*)x, (const __nv_bfloat16*)grad_out,
+        (__nv_bfloat16*)d_x, rows, D, eps);
+}
+
+// =============================================================================
+// FUSION 3: fused_rope_rms_norm_fwd
+//
+// RoPE + per-head RMSNorm. One block per head-row, hdim threads.
+// Kept as-is since hdim=128 is different from D=512 and uses per-head blocks.
+// =============================================================================
+
+__global__ void fused_rope_rms_norm_fwd_kernel(
+    const __nv_bfloat16* __restrict__ x,
+    const __nv_bfloat16* __restrict__ cos_t,
+    const __nv_bfloat16* __restrict__ sin_t,
+    __nv_bfloat16* __restrict__ out,
+    uint32_t T, uint32_t n_head, uint32_t hdim, float eps)
+{
+    uint32_t row = blockIdx.x;
+    uint32_t d = threadIdx.x;
+    if (d >= hdim) return;
+
+    uint32_t half_d = hdim / 2;
+    uint32_t t = (row / n_head) % T;
+    uint64_t base = (uint64_t)row * hdim;
+
+    // RoPE rotation
+    float rotated;
+    if (d < half_d) {
+        float v1 = __bfloat162float(x[base + d]);
+        float v2 = __bfloat162float(x[base + d + half_d]);
+        float c = __bfloat162float(cos_t[t * half_d + d]);
+        float s = __bfloat162float(sin_t[t * half_d + d]);
+        rotated = v1 * c + v2 * s;
+    } else {
+        uint32_t d2 = d - half_d;
+        float v1 = __bfloat162float(x[base + d - half_d]);
+        float v2 = __bfloat162float(x[base + d]);
+        float c = __bfloat162float(cos_t[t * half_d + d2]);
+        float s = __bfloat162float(sin_t[t * half_d + d2]);
+        rotated = -v1 * s + v2 * c;
+    }
+
+    // Per-head RMSNorm: reduce sum_sq over hdim
+    float sq = rotated * rotated;
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1)
+        sq += __shfl_xor_sync(0xffffffff, sq, offset);
+
+    __shared__ float smem[4];
+    int lane = d & 31;
+    int warp_id = d >> 5;
+    if (lane == 0) smem[warp_id] = sq;
+    __syncthreads();
+
+    uint32_t n_warps = (hdim + 31) / 32;
+    float sum_sq = 0.0f;
+    for (uint32_t i = 0; i < n_warps; i++) sum_sq += smem[i];
+
+    float rrms = rsqrtf(sum_sq / (float)hdim + eps);
+    out[base + d] = __float2bfloat16(rotated * rrms);
+}
+
+extern "C" void fused_rope_rms_norm_fwd(
+    const void* x, const void* cos_t, const void* sin_t, void* out,
+    uint32_t rows, uint32_t T, uint32_t n_head, uint32_t hdim, float eps,
+    cudaStream_t stream)
+{
+    dim3 grid(rows);
+    dim3 block(hdim);
+    fused_rope_rms_norm_fwd_kernel<<<grid, block, 0, stream>>>(
+        (const __nv_bfloat16*)x, (const __nv_bfloat16*)cos_t,
+        (const __nv_bfloat16*)sin_t, (__nv_bfloat16*)out,
+        T, n_head, hdim, eps);
+}
+
+// =============================================================================
+// Fused residual_scale + RMSNorm forward  (warp-per-row)
+// scaled_x = lambda_r * x + lambda_0 * x0;  norm_out = rms_norm(scaled_x)
+// =============================================================================
+
+__global__ void fused_residual_norm_fwd_kernel(
+    const __nv_bfloat16* __restrict__ x,
+    const __nv_bfloat16* __restrict__ x0,
+    const __nv_bfloat16* __restrict__ lambda_r_ptr,
+    const __nv_bfloat16* __restrict__ lambda_0_ptr,
+    __nv_bfloat16* __restrict__ scaled_x_out,
+    __nv_bfloat16* __restrict__ norm_out,
+    uint32_t rows, uint32_t D, float eps)
+{
+    uint32_t lane = threadIdx.x & 31;
+    uint32_t warp_id = threadIdx.x >> 5;
+    uint32_t warps_per_block = blockDim.x >> 5;
+    uint32_t row = blockIdx.x * warps_per_block + warp_id;
+    if (row >= rows) return;
+
+    const __nv_bfloat16* xr  = x  + (uint64_t)row * D;
+    const __nv_bfloat16* x0r = x0 + (uint64_t)row * D;
+    __nv_bfloat16* sxr = scaled_x_out + (uint64_t)row * D;
+    __nv_bfloat16* nr  = norm_out + (uint64_t)row * D;
+
+    float lr = __bfloat162float(lambda_r_ptr[0]);
+    float l0 = __bfloat162float(lambda_0_ptr[0]);
+
+    // Pass 1: compute scaled_x and sum_sq
+    float local_sq = 0.0f;
+    for (uint32_t i = lane; i < D; i += 32) {
+        float v = lr * __bfloat162float(xr[i]) + l0 * __bfloat162float(x0r[i]);
+        sxr[i] = __float2bfloat16(v);
+        local_sq += v * v;
+    }
+    float sum_sq = warp_reduce_sum_fnr(local_sq);
+    float rrms = rsqrtf(sum_sq / (float)D + eps);
+
+    // Pass 2: write normed output (scaled_x re-read from L1 cache)
+    for (uint32_t i = lane; i < D; i += 32) {
+        nr[i] = __float2bfloat16(__bfloat162float(sxr[i]) * rrms);
+    }
+}
+
+extern "C" void fused_residual_norm_fwd(
+    const void* x, const void* x0,
+    const void* lambda_r_ptr, const void* lambda_0_ptr,
+    void* scaled_x_out, void* norm_out,
+    uint32_t rows, uint32_t D, float eps, cudaStream_t stream)
+{
+    uint32_t warps_per_block = 8;
+    uint32_t threads = warps_per_block * 32;
+    uint32_t blocks = (rows + warps_per_block - 1) / warps_per_block;
+    fused_residual_norm_fwd_kernel<<<blocks, threads, 0, stream>>>(
+        (const __nv_bfloat16*)x, (const __nv_bfloat16*)x0,
+        (const __nv_bfloat16*)lambda_r_ptr, (const __nv_bfloat16*)lambda_0_ptr,
+        (__nv_bfloat16*)scaled_x_out, (__nv_bfloat16*)norm_out,
+        rows, D, eps);
+}
+
+// =============================================================================
+// Fused backward: rms_norm_bwd + residual_add + residual_scale_bwd (warp-per-row)
+// =============================================================================
+
+__global__ void fused_residual_norm_bwd_kernel(
+    const __nv_bfloat16* __restrict__ grad_out,
+    const __nv_bfloat16* __restrict__ d_x_in,
+    const __nv_bfloat16* __restrict__ x_pre,
+    const __nv_bfloat16* __restrict__ x0,
+    const __nv_bfloat16* __restrict__ lambda_r_ptr,
+    const __nv_bfloat16* __restrict__ lambda_0_ptr,
+    __nv_bfloat16* __restrict__ d_x_out,
+    __nv_bfloat16* __restrict__ d_x0,
+    float* __restrict__ d_lambda_r,
+    float* __restrict__ d_lambda_0,
+    uint32_t rows, uint32_t D, float eps)
+{
+    uint32_t lane = threadIdx.x & 31;
+    uint32_t warp_id = threadIdx.x >> 5;
+    uint32_t warps_per_block = blockDim.x >> 5;
+    uint32_t row = blockIdx.x * warps_per_block + warp_id;
+    if (row >= rows) return;
+
+    const __nv_bfloat16* gor   = grad_out + (uint64_t)row * D;
+    const __nv_bfloat16* dxir  = d_x_in   + (uint64_t)row * D;
+    const __nv_bfloat16* xpr   = x_pre    + (uint64_t)row * D;
+    const __nv_bfloat16* x0r   = x0       + (uint64_t)row * D;
+    __nv_bfloat16* dxor        = d_x_out  + (uint64_t)row * D;
+    __nv_bfloat16* dx0r        = d_x0     + (uint64_t)row * D;
+
+    float lr = __bfloat162float(lambda_r_ptr[0]);
+    float l0 = __bfloat162float(lambda_0_ptr[0]);
+
+    // Reduction pass: sum_sq(scaled_x) and dot(grad_out, scaled_x)
+    float local_sq  = 0.0f;
+    float local_dot = 0.0f;
+    for (uint32_t i = lane; i < D; i += 32) {
+        float ti = lr * __bfloat162float(xpr[i]) + l0 * __bfloat162float(x0r[i]);
+        float gi = __bfloat162float(gor[i]);
+        local_sq  += ti * ti;
+        local_dot += gi * ti;
+    }
+    float sum_sq = warp_reduce_sum_fnr(local_sq);
+    float dot_gx = warp_reduce_sum_fnr(local_dot);
+
+    float rrms  = rsqrtf(sum_sq / (float)D + eps);
+    float coeff = dot_gx / (float)D * rrms * rrms;
+
+    // Writeback pass with lambda reductions
+    float local_dlr = 0.0f;
+    float local_dl0 = 0.0f;
+
+    for (uint32_t i = lane; i < D; i += 32) {
+        float xpi = __bfloat162float(xpr[i]);
+        float x0i = __bfloat162float(x0r[i]);
+        float ti  = lr * xpi + l0 * x0i;
+        float gi  = __bfloat162float(gor[i]);
+
+        float d_temp = rrms * (gi - ti * coeff);
+        float d_x_total = __bfloat162float(dxir[i]) + d_temp;
+
+        dxor[i] = __float2bfloat16(lr * d_x_total);
+        float old_dx0 = __bfloat162float(dx0r[i]);
+        dx0r[i] = __float2bfloat16(old_dx0 + l0 * d_x_total);
+
+        local_dlr += xpi * d_x_total;
+        local_dl0 += x0i * d_x_total;
+    }
+
+    // Warp-reduce lambda gradients and atomicAdd to global
+    local_dlr = warp_reduce_sum_fnr(local_dlr);
+    local_dl0 = warp_reduce_sum_fnr(local_dl0);
+    if (lane == 0) {
+        atomicAdd(d_lambda_r, local_dlr);
+        atomicAdd(d_lambda_0, local_dl0);
+    }
+}
+
+extern "C" void fused_residual_norm_bwd(
+    const void* grad_out, const void* d_x_in,
+    const void* x_pre, const void* x0,
+    const void* lambda_r_ptr, const void* lambda_0_ptr,
+    void* d_x_out, void* d_x0,
+    float* d_lambda_r, float* d_lambda_0,
+    uint32_t rows, uint32_t D, float eps, cudaStream_t stream)
+{
+    uint32_t warps_per_block = 8;
+    uint32_t threads = warps_per_block * 32;
+    uint32_t blocks = (rows + warps_per_block - 1) / warps_per_block;
+    fused_residual_norm_bwd_kernel<<<blocks, threads, 0, stream>>>(
+        (const __nv_bfloat16*)grad_out, (const __nv_bfloat16*)d_x_in,
+        (const __nv_bfloat16*)x_pre, (const __nv_bfloat16*)x0,
+        (const __nv_bfloat16*)lambda_r_ptr, (const __nv_bfloat16*)lambda_0_ptr,
+        (__nv_bfloat16*)d_x_out, (__nv_bfloat16*)d_x0,
+        d_lambda_r, d_lambda_0, rows, D, eps);
+}

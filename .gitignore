@@ -1,0 +1,45 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.DS_Store
+
+# Virtual environments
+.venv
+worktrees/
+queue/
+
+# Agent prompt files (generated per-session by launchers)
+CLAUDE.md
+AGENTS.md
+
+# Experimental code/artifacts
+dev/
+
+
+# Rust build artifacts
+/target
+/engine/target
+
+# Secrets — never commit
+.env
+hpc/.env
+hpc/.deploy_state
+hpc/.deploy_state.done
+hpc/.state/
+
+# Model weights and checkpoints (non-LFS)
+*.ckpt
+results/*.log
+results/*.jsonl
+
+# Compiled Metal shaders
+*.air
+*.metallib
+
+# Training data (downloaded by prepare)
+data/
+engine/init_weights_*.safetensors

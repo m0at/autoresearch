@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="340" viewBox="0 0 600 340">
+  <style>
+    text { font-family: system-ui, -apple-system, sans-serif; }
+    .title { font-size: 14px; font-weight: 600; fill: #111827; }
+    .axis-label { font-size: 11px; fill: #6b7280; }
+    .bar-label { font-size: 11px; fill: #374151; }
+    .bar-value { font-size: 11px; font-weight: 700; }
+    .grid { stroke: #e5e7eb; stroke-width: 1; }
+    .baseline-label { font-size: 10.5px; fill: #7c3aed; font-weight: 600; }
+    .legend-text { font-size: 11px; fill: #374151; }
+  </style>
+
+  <rect width="600" height="340" fill="white" rx="8"/>
+
+  <!-- Title -->
+  <text x="300" y="26" text-anchor="middle" class="title">Batch size vs val_bpb (700 optimizer steps)</text>
+
+  <!-- Chart area: x=90..560, y=45..270 -->
+  <!-- Y axis: 0.97 to 1.06, range=0.09, height=225px, scale=225/0.09=2500 px/unit -->
+
+  <!-- Grid: 0.97, 0.99, 1.01, 1.03, 1.05 -->
+  <!-- y=0.97 → 45; y=0.99 → 45+50=95; y=1.01→95+50=145; y=1.03→195; y=1.05→245 -->
+  <!-- Actually: y = 45 + (1.06-val)*2500 -->
+  <!-- 1.06→45; 1.04→45+50=95; 1.02→145; 1.00→195; 0.98→245... Let me use consistent grid -->
+  <!-- Range 1.06→0.97, height 225, scale=225/0.09=2500 -->
+  <!-- Grid at 1.06, 1.03, 1.00, 0.97 -->
+  <line x1="90" y1="45" x2="560" y2="45" class="grid"/>
+  <line x1="90" y1="120" x2="560" y2="120" class="grid"/>
+  <line x1="90" y1="195" x2="560" y2="195" class="grid"/>
+  <line x1="90" y1="270" x2="560" y2="270" class="grid"/>
+
+  <!-- Y labels: 1.06 at y=45, 1.03 at y=120, 1.00 at y=195, 0.97 at y=270 -->
+  <text x="82" y="49" text-anchor="end" class="axis-label">1.060</text>
+  <text x="82" y="124" text-anchor="end" class="axis-label">1.030</text>
+  <text x="82" y="199" text-anchor="end" class="axis-label">1.000</text>
+  <text x="82" y="274" text-anchor="end" class="axis-label">0.970</text>
+
+  <!-- Axes -->
+  <line x1="90" y1="45" x2="90" y2="270" stroke="#d1d5db" stroke-width="1.5"/>
+  <line x1="90" y1="270" x2="560" y2="270" stroke="#d1d5db" stroke-width="1.5"/>
+
+  <!-- Y axis title -->
+  <text transform="translate(16,160) rotate(-90)" text-anchor="middle" class="axis-label">val_bpb (lower is better)</text>
+
+  <!-- X axis title -->
+  <text x="325" y="300" text-anchor="middle" class="axis-label">Batch Size (tokens/step)</text>
+
+  <!-- Karpathy baseline: 0.998 → y = 45 + (1.06-0.998)*(225/0.09) = 45 + 0.062*2500 = 45+155 = 200 -->
+  <line x1="90" y1="200" x2="560" y2="200" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="564" y="204" class="baseline-label">0.998</text>
+
+  <!--
+    3 bars centered at x = 175, 325, 475. Width 90px.
+
+    val_bpb y formula: y = 45 + (1.06 - val) * 2500
+
+    262K → 1.040 → y = 45 + 0.020*2500 = 45+50 = 95, h = 270-95 = 175
+    524K → 1.009 → y = 45 + 0.051*2500 = 45+127.5 = 172.5, h = 97.5
+    1M   → 0.991 → y = 45 + 0.069*2500 = 45+172.5 = 217.5, h = 52.5
+  -->
+
+  <!-- Bar 262K: blue, y=95, h=175 -->
+  <rect x="130" y="95" width="90" height="175" fill="#2563eb" rx="4" opacity="0.75"/>
+  <text x="175" y="90" text-anchor="middle" class="bar-value" fill="#2563eb">1.040</text>
+  <text x="175" y="287" text-anchor="middle" class="bar-label">262K</text>
+  <text x="175" y="300" text-anchor="middle" class="bar-label">(half)</text>
+
+  <!-- Bar 524K: blue, y=172.5≈173, h=97 -->
+  <rect x="280" y="173" width="90" height="97" fill="#2563eb" rx="4" opacity="0.75"/>
+  <text x="325" y="168" text-anchor="middle" class="bar-value" fill="#2563eb">1.009</text>
+  <text x="325" y="287" text-anchor="middle" class="bar-label">524K</text>
+  <text x="325" y="300" text-anchor="middle" class="bar-label">(original)</text>
+
+  <!-- Bar 1M: green (winner), y=217.5≈218, h=52 -->
+  <rect x="430" y="218" width="90" height="52" fill="#16a34a" rx="4" opacity="0.9"/>
+  <text x="475" y="213" text-anchor="middle" class="bar-value" fill="#16a34a">0.991</text>
+  <text x="475" y="287" text-anchor="middle" class="bar-label">1M</text>
+  <text x="475" y="300" text-anchor="middle" class="bar-label">(double)</text>
+
+  <!-- Winner badge -->
+  <rect x="440" y="224" width="70" height="18" fill="#16a34a" rx="3" opacity="0.15"/>
+  <text x="475" y="237" text-anchor="middle" font-size="9.5" font-weight="600" fill="#15803d">beats baseline</text>
+
+  <!-- Legend -->
+  <rect x="160" y="318" width="12" height="12" fill="#2563eb" rx="2" opacity="0.75"/>
+  <text x="176" y="329" class="legend-text">Below baseline</text>
+  <rect x="290" y="318" width="12" height="12" fill="#16a34a" rx="2" opacity="0.9"/>
+  <text x="306" y="329" class="legend-text">Winner (beats Karpathy)</text>
+  <line x1="448" y1="323" x2="468" y2="323" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="472" y="328" class="legend-text">Karpathy 0.998</text>
+</svg>

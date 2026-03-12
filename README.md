@@ -259,7 +259,7 @@ Override via env var: `PEAK_LR`, `COOLDOWN_STEPS`, `MAX_STEPS`, `EMBEDDING_LR`, 
 ## Data Pipeline
 
 ```bash
-NUM_TRAIN_SHARDS=794 python3 engine/feeder.py --stream --prefetch 4 2>/tmp/feeder.log \
+NUM_TRAIN_SHARDS=794 python3 brain/feeder.py --stream --prefetch 4 2>/tmp/feeder.log \
   | BATCH_SIZE=64 MAX_STEPS=1000 COOLDOWN_STEPS=500 /root/autoresearch-engine train \
       --stream-input \
       --data-dir /root/.cache/autoresearch/shards_packed \
@@ -286,12 +286,12 @@ Impact on val_bpb: **pending** (neuron rinsing study queued after clean LR sweep
 
 ---
 
-## Engine (`engine/`)
+## Brain (`brain/`)
 
 Custom CUDA engine. No autograd — all forward/backward passes are hand-written.
 
 ```
-engine/src/
+brain/src/
   main.rs          — CLI, config from env vars
   train.rs         — training loop, WSD schedule, eval, checkpointing, neuron rinsing
   forward.rs       — GPT forward pass
@@ -303,7 +303,7 @@ engine/src/
   ffi.rs           — Flash Attention 3 bindings
   init_weights.rs  — weight initialization
 
-engine/kernels/    — 13 hand-written CUDA kernels
+brain/kernels/    — 13 hand-written CUDA kernels
   muon.cu          — Muon optimizer (Newton-Schulz orthogonalization)
   adamw.cu         — AdamW for scalars
   fused_norm_residual.cu
@@ -320,7 +320,7 @@ engine/kernels/    — 13 hand-written CUDA kernels
 ```
 
 **Flash Attention 3** (Hopper-only): prebuilt `libflashattention3.a`, hdim128 bf16 sm90.
-Build: `bash engine/fa3/build_fa3.sh`
+Build: `bash brain/fa3/build_fa3.sh`
 Link: `FLASH_ATTN_V3_BUILD_DIR=fa3/build cargo build --release`
 
 ---
@@ -353,7 +353,7 @@ export PATH="/root/.cargo/bin:/usr/local/cuda/bin:$PATH"
 apt-get install -y pkg-config libssl-dev
 
 # 3. Build FA3 (build instance only, ~5 min first time)
-cd /root/autoresearch-src/engine
+cd /root/autoresearch-src/brain
 bash fa3/build_fa3.sh   # clones flash-attention, compiles sm_90a objects, produces fa3/build/libflashattention3.a
 
 # 4. Build engine
@@ -368,7 +368,7 @@ scp -P <build-port> root@<build-host>:/root/.cache/autoresearch/shards_packed/ /
 scp -P <run-port> -r /tmp/shards_packed/ root@<run-host>:/root/.cache/autoresearch/
 
 # 7. Push feeder.py to run instances
-scp -P <run-port> engine/feeder.py root@<run-host>:/root/feeder.py
+scp -P <run-port> brain/feeder.py root@<run-host>:/root/feeder.py
 ```
 
 ### Syncing source to build instance
@@ -378,7 +378,7 @@ The repo is private. SSH keys are not automatically present on new instances, an
 ```bash
 rsync -az -e "ssh -p <build-port>" \
   --exclude=target --exclude='.git' --exclude='fa3/build' \
-  engine/ root@<build-host>:/root/autoresearch-src/engine/
+  engine/ root@<build-host>:/root/autoresearch-src/brain/
 ```
 
 After a code change, rebuild takes ~3s (incremental, FA3 already cached):
@@ -448,7 +448,7 @@ NUM_TRAIN_SHARDS=794 autoresearch-engine train ...
 
 ```bash
 export PATH="/root/.cargo/bin:/usr/local/cuda/bin:$PATH"
-cd /root/autoresearch-src/engine
+cd /root/autoresearch-src/brain
 FLASH_ATTN_V3_BUILD_DIR=fa3/build cargo build --release
 ```
 

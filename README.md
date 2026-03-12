@@ -80,6 +80,21 @@ Seeing as there seems to be a lot of interest in tinkering with autoresearch on 
 
 I think these would be the reasonable hyperparameters to play with. Ask your favorite coding agent for help and copy paste them this guide, as well as the full source code.
 
+## Alternative backends
+
+### Rust/CUDA (H100, sm90)
+
+A high-performance Rust reimplementation of the training loop in [`backends/rust/`](backends/rust/). Replaces `train.py` with a compiled binary using custom CUDA kernels and Flash Attention 3. Key results vs the Python baseline (both 1000 steps, same data):
+
+| | Python baseline | Rust backend |
+|--|--|--|
+| val_bpb | ~0.998 | **~0.862** |
+| MFU | ~35% | ~80% |
+| Depth | 8 | 30 |
+| Attention | FA2 full | FA3 sliding window (SSSSL) |
+
+Architecture changes validated through ablation: sliding-window attention (SSSSL pattern), Value Enhancement gating, RoPE embeddings, 50% cooldown ratio, per-group embedding LR. See [`backends/rust/README.md`](backends/rust/README.md) for build/run instructions.
+
 ## Notable forks
 
 - [miolini/autoresearch-macos](https://github.com/miolini/autoresearch-macos) (MacOS)

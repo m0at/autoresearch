@@ -1,0 +1,3 @@
+[workspace]
+members = ["brain"]
+resolver = "2"

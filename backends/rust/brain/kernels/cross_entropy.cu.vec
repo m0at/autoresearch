@@ -1,0 +1,171 @@
+#include <cuda_bf16.h>
+#include <cuda_runtime.h>
+#include <math_constants.h>
+#include <stdint.h>
+
+// ── Warp reduction helpers ──────────────────────────────────────────────────
+
+__device__ __forceinline__ float warp_reduce_sum(float val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1)
+        val += __shfl_xor_sync(0xffffffff, val, offset);
+    return val;
+}
+
+__device__ __forceinline__ float warp_reduce_max(float val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1)
+        val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, offset));
+    return val;
+}
+
+__device__ __forceinline__ float block_reduce_sum(float val, float* shared) {
+    int lane = threadIdx.x & 31;
+    int warp_id = threadIdx.x >> 5;
+    val = warp_reduce_sum(val);
+    if (lane == 0) shared[warp_id] = val;
+    __syncthreads();
+    uint32_t n_warps = (blockDim.x + 31) / 32;
+    float total = 0.0f;
+    for (uint32_t i = 0; i < n_warps; i++) total += shared[i];
+    return total;
+}
+
+__device__ __forceinline__ float block_reduce_max(float val, float* shared) {
+    int lane = threadIdx.x & 31;
+    int warp_id = threadIdx.x >> 5;
+    val = warp_reduce_max(val);
+    if (lane == 0) shared[warp_id] = val;
+    __syncthreads();
+    uint32_t n_warps = (blockDim.x + 31) / 32;
+    float m = -CUDART_INF_F;
+    for (uint32_t i = 0; i < n_warps; i++) m = fmaxf(m, shared[i]);
+    return m;
+}
+
+__device__ __forceinline__ float apply_softcap(float v, float cap) {
+    return (cap > 0.0f) ? cap * tanhf(v / cap) : v;
+}
+
+// ── Cross-entropy forward (register-cached) ─────────────────────────────────
+// Single global read: cache softcapped logits in registers, then reduce from
+// registers for max and exp_sum. Requires V == VPT * blockDim.x.
+// VPT=32 for V=8192, blockDim=256.
+
+#define CE_VPT 32
+
+__global__ void fused_cross_entropy_fwd_kernel(
+    const __nv_bfloat16* __restrict__ logits,
+    const uint32_t* __restrict__ targets,
+    float* __restrict__ losses,
+    float* __restrict__ loss_sum,
+    uint32_t V, float softcap)
+{
+    const __nv_bfloat16* xr = logits + (uint64_t)blockIdx.x * V;
+    uint32_t tgt = targets[blockIdx.x];
+
+    __shared__ float shared[32];
+
+    float cached[CE_VPT];
+
+    // Single global read: softcap and cache all logits, find max
+    float local_max = -CUDART_INF_F;
+    for (int j = 0; j < CE_VPT; j++) {
+        uint32_t i = threadIdx.x + (uint32_t)j * blockDim.x;
+        float v = apply_softcap(__bfloat162float(xr[i]), softcap);
+        cached[j] = v;
+        local_max = fmaxf(local_max, v);
+    }
+    float m = block_reduce_max(local_max, shared);
+    __syncthreads();
+
+    // Pass 2: sum of exp (from registers, no global read)
+    float local_sum = 0.0f;
+    for (int j = 0; j < CE_VPT; j++) {
+        local_sum += expf(cached[j] - m);
+    }
+    float total = block_reduce_sum(local_sum, shared);
+
+    if (threadIdx.x == 0) {
+        float logit_tgt = apply_softcap(__bfloat162float(xr[tgt]), softcap);
+        float loss = -(logit_tgt - m) + logf(total);
+        if (losses) losses[blockIdx.x] = loss;
+        if (loss_sum) atomicAdd(loss_sum, loss);
+    }
+}
+
+// ── Cross-entropy backward (register-cached) ────────────────────────────────
+// Single global read: cache softcapped values, compute max and exp_sum from
+// registers, then write gradients. Eliminates 2 of 3 global reads.
+
+__global__ void fused_cross_entropy_bwd_kernel(
+    const __nv_bfloat16* __restrict__ logits,
+    const uint32_t* __restrict__ targets,
+    const float* __restrict__ grad_res,
+    __nv_bfloat16* __restrict__ grad_in,
+    uint32_t V, float softcap)
+{
+    const __nv_bfloat16* xr = logits + (uint64_t)blockIdx.x * V;
+    __nv_bfloat16* gr = grad_in + (uint64_t)blockIdx.x * V;
+    uint32_t tgt = targets[blockIdx.x];
+    float scale = grad_res[blockIdx.x];
+
+    __shared__ float shared[32];
+
+    float cached_s[CE_VPT];
+
+    // Single global read: softcap and cache, find max
+    float local_max = -CUDART_INF_F;
+    for (int j = 0; j < CE_VPT; j++) {
+        uint32_t i = threadIdx.x + (uint32_t)j * blockDim.x;
+        float s = apply_softcap(__bfloat162float(xr[i]), softcap);
+        cached_s[j] = s;
+        local_max = fmaxf(local_max, s);
+    }
+    float m = block_reduce_max(local_max, shared);
+    __syncthreads();
+
+    // Pass 2: sum of exp (from registers)
+    float local_sum = 0.0f;
+    for (int j = 0; j < CE_VPT; j++) {
+        local_sum += expf(cached_s[j] - m);
+    }
+    float total = block_reduce_sum(local_sum, shared);
+    float inv_sum = 1.0f / total;
+
+    // Pass 3: write gradients (from registers, single global write)
+    for (int j = 0; j < CE_VPT; j++) {
+        uint32_t i = threadIdx.x + (uint32_t)j * blockDim.x;
+        float s = cached_s[j];
+        float p = expf(s - m) * inv_sum;
+        float indicator = (i == tgt) ? 1.0f : 0.0f;
+        float ce_grad = (p - indicator) * scale;
+        // softcap derivative: 1 - tanh(x/cap)^2 = 1 - (s/cap)^2
+        float softcap_deriv = (softcap > 0.0f) ? (1.0f - (s / softcap) * (s / softcap)) : 1.0f;
+        gr[i] = __float2bfloat16(ce_grad * softcap_deriv);
+    }
+}
+
+// ── C entry points ──────────────────────────────────────────────────────────
+
+extern "C" void fused_cross_entropy_fwd(
+    const void* logits, const void* targets, void* losses,
+    void* loss_sum, uint32_t N, uint32_t V, float softcap, cudaStream_t stream)
+{
+    dim3 grid(N);
+    dim3 block(256);
+    fused_cross_entropy_fwd_kernel<<<grid, block, 0, stream>>>(
+        (const __nv_bfloat16*)logits, (const uint32_t*)targets,
+        (float*)losses, (float*)loss_sum, V, softcap);
+}
+
+extern "C" void fused_cross_entropy_bwd(
+    const void* logits, const void* targets, const void* grad_res,
+    void* grad_in, uint32_t N, uint32_t V, float softcap, cudaStream_t stream)
+{
+    dim3 grid(N);
+    dim3 block(256);
+    fused_cross_entropy_bwd_kernel<<<grid, block, 0, stream>>>(
+        (const __nv_bfloat16*)logits, (const uint32_t*)targets,
+        (const float*)grad_res, (__nv_bfloat16*)grad_in, V, softcap);
+}

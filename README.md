@@ -44,7 +44,7 @@ The entire gap at 700 steps is the data pipeline. Best-fit bin-packing eliminate
 
 | Run | model | val_bpb |
 |-----|-------|---------|
-| Python reference (Karpathy) | depth=8, d_model=512, 50M params | 0.9921 |
+| Python reference (Karpathy) | depth=12, d_model=768, ~124M params | 0.9921 |
 | **Rust engine (optimized)** | **depth=30, d_model=512, 119.5M params** | **0.8673** |
 | **total gap** | | **−0.125** |
 
@@ -134,14 +134,7 @@ Learning curves (val_bpb by step) for the fine sweep — all three tracked in `r
 
 Neuron rinsing: at each reinit step (200, 400), layers with EMA(act_norm × grad_norm) score below 50% of the mean have their MLP weights re-randomized and Muon momentum zeroed. A 2× → 1× gradient boost is applied over 50 steps post-reinit. Scoring is generalization-aware: val gradient norms are captured at each eval step, and the ratio val_grad / train_grad is folded into the EMA to suppress memorizing layers before they flatline.
 
-First: prove it works at the best LR before sweeping.
-
-| LR | clean val_bpb | rinsing val_bpb | delta |
-|----|--------------|-----------------|-------|
-| **0.042** | **0.8673** | **running** | pending |
-| 0.02 | 0.8673 | — | queued |
-| 0.01 | 0.8775 | — | queued |
-| 0.003 | 0.9499 | — | queued |
+Tested dynamic layer reinit at 0%, 2%, 5%, and 10% dead-neuron thresholds. Zero reinit events fired across all thresholds. Muon's Newton-Schulz orthogonalization continuously redistributes gradient energy, preventing neuron death entirely. Rinsing code is present but disabled.
 
 ### Python 1k-step baseline
 
@@ -301,7 +294,7 @@ A dynamic layer importance system that tracks per-layer gradient and activation 
 
 **Implementation:** `layer_stat.cu` (L2 norm + scale kernels), `buffer.rs` (4 new GPU buffers), `forward.rs` + `backward.rs` (norm capture), `train.rs` (EMA update, reinit logic, val gradient capture).
 
-Impact on val_bpb: **pending** (neuron rinsing study queued after clean LR sweep completes).
+**Result:** No impact. Zero reinit events at all thresholds (0%, 2%, 5%, 10%). Muon prevents neuron death entirely. Rinsing is disabled.
 
 ---
 

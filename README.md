@@ -57,7 +57,10 @@ What we kept fixed: 1000 optimizer steps, 524,288 tokens/step, single H100, same
 
 ### In progress
 
-- **Full epoch (8200 steps):** 428M model, 4.3B tokens (~10 tokens/param), 30% cooldown. Step ~1105/8200, val_bpb 0.7083 and falling (still at full LR — cooldown doesn't start until step 5740).
+- **Full epoch (8200 steps):** 428M model, 4.3B tokens (~10 tokens/param), 30% cooldown. Step ~1525/8200, val_bpb 0.6533 best so far (still at full LR — cooldown doesn't start until step 5740).
+- **Cooldown fine sweep** on 428M at 1000 steps (narrowing around 30% optimum):
+  - 35% cooldown — step ~325, val_bpb 0.8499 (still at full LR)
+  - 40% cooldown — step ~375, val_bpb 0.7572 (still at full LR)
 
 ### Cooldown sweep (complete)
 

@@ -119,7 +119,11 @@ Scaled the model to 428M params (D=1024, 8 heads, MLP=4096) with 32768-token con
 
 VRAM usage: 48.6 GB allocated, 53.4 GB peak (of 80 GB available). Training speed: ~9.9s/step, 53K tok/s, 25.5% MFU. Total wall time: ~2.8 hours.
 
-### Phase 1 — Depth sweep (S=256, emb_lr=0.9, cooldown=50%, 1000 steps, seed=42)
+### Phase 1 — Original results (119.5M params, T=2048)
+
+![Phase 1 val_bpb comparison](brain_vs_karpathy.png)
+
+#### Depth sweep (S=256, emb_lr=0.9, cooldown=50%, 1000 steps, seed=42)
 
 | depth | params | val_bpb | notes |
 |-------|--------|---------|-------|

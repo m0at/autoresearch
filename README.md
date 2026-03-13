@@ -37,10 +37,12 @@ This works because of three changes to the training recipe:
 | Cooldown | Tokens/param | val_bpb | Regime |
 |----------|-------------|---------|--------|
 | 50% | 4.4 (Phase 1, 119.5M) | 0.8600 | Near Chinchilla-optimal |
-| 70% | 1.2 (Phase 2, 428M) | 0.6111 | Undertrained |
+| 10% | 1.2 (Phase 2, 428M) | 0.6717 | Undertrained |
+| 20% | 1.2 (Phase 2, 428M) | 0.5849 | Undertrained |
 | **30%** | **1.2 (Phase 2, 428M)** | **0.5392** | **Undertrained** |
+| 70% | 1.2 (Phase 2, 428M) | 0.6111 | Undertrained |
 
-In the undertrained regime, cooldown is wasted compute — the model hasn't finished learning and you're already decaying the LR. Shorter cooldown = more steps at full LR = more learning. 10% and 20% cooldown ablations are currently running.
+In the undertrained regime, cooldown is wasted compute — the model hasn't finished learning and you're already decaying the LR. But too little cooldown also hurts: 10% barely has time to anneal, and 20% undershoots the optimum. 30% is the sweet spot — enough steps at full LR to absorb signal, enough cooldown to settle into a good basin.
 
 ### What we relaxed
 
@@ -55,12 +57,20 @@ What we kept fixed: 1000 optimizer steps, 524,288 tokens/step, single H100, same
 
 ### In progress
 
-- **Full epoch (8200 steps):** 428M model, 4.3B tokens (~10 tokens/param), 30% cooldown. Step ~825/8200, val_bpb 0.6677 and falling (still at full LR — cooldown doesn't start until step 5740).
-- **Cooldown sweep** on 428M at 1000 steps:
-  - 10% cooldown — step ~775, val_bpb 0.8001 (cooldown starts at step 900)
-  - 20% cooldown — step ~800, val_bpb 0.7411 (cooldown just started)
-  - 30% cooldown — completed, final **0.5392** (baseline)
-  - 70% cooldown — completed, final 0.6111
+- **Full epoch (8200 steps):** 428M model, 4.3B tokens (~10 tokens/param), 30% cooldown. Step ~1105/8200, val_bpb 0.7083 and falling (still at full LR — cooldown doesn't start until step 5740).
+
+### Cooldown sweep (complete)
+
+Full 428M cooldown ablation at 1000 steps, all other settings identical:
+
+| Cooldown | Steps at peak LR | val_bpb | Notes |
+|----------|-------------------|---------|-------|
+| 10% (100 steps) | 900 | 0.6717 | Too little annealing time |
+| 20% (200 steps) | 800 | 0.5849 | Better, but undershoots |
+| **30% (300 steps)** | **700** | **0.5392** | **Best — optimal balance** |
+| 70% (700 steps) | 300 | 0.6111 | Too little time at full LR |
+
+30% cooldown is the clear optimum. The curve is U-shaped: too short (10%) doesn't give the LR schedule enough time to settle; too long (70%) wastes steps on decay when the model hasn't finished learning.
 
 ---
 
@@ -106,8 +116,10 @@ Scaled the model to 428M params (D=1024, 8 heads, MLP=4096) with 32768-token con
 
 | Cooldown | Steps at peak LR | val_bpb | Notes |
 |----------|-------------------|---------|-------|
+| 10% (100 steps) | 900 | 0.6717 | Too little annealing |
+| 20% (200 steps) | 800 | 0.5849 | Undershoots optimum |
+| **30% (300 steps)** | **700** | **0.5392** | **Best** |
 | 70% (700 steps) | 300 | 0.6111 | Too little time at full LR |
-| **30% (300 steps)** | **700** | **0.5392** | **Best — maximizes learning before decay** |
 
 **Undertraining-aware hyperparameters:**
 
@@ -275,10 +287,12 @@ The optimal cooldown fraction depends on the token/param ratio:
 
 | cooldown fraction | val_bpb |
 |------------------|---------|
-| 70% (700 steps) | 0.6111 |
+| 10% (100 steps) | 0.6717 |
+| 20% (200 steps) | 0.5849 |
 | **30% (300 steps)** | **0.5392** |
+| 70% (700 steps) | 0.6111 |
 
-30% wins by 0.072 bpb — a massive gap. When data is scarce, every step at full LR matters. The model hasn't finished learning by the time a 70% cooldown kicks in; it's decaying the LR while there's still signal to absorb. 10% and 20% ablations are running to find whether even shorter cooldown helps.
+30% wins. The relationship is U-shaped: 70% wastes too many steps on LR decay while the model is still learning; 10% doesn't give enough annealing time for the model to settle into a good basin. The gap between 30% and 20% (0.046 bpb) and between 30% and 10% (0.133 bpb) confirms the optimum is sharply peaked.
 
 This is the most actionable finding from Phase 2: **cooldown ratio is not a fixed hyperparameter — it must scale with the data/parameter budget.**
 

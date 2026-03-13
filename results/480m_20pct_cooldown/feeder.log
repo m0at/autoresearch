@@ -1,0 +1,6 @@
+[feeder] tokenizer loaded, vocab=8192, bos=8188
+[feeder] 10000 rows, 2 rows/s, 6279s
+[feeder] rows=16072 elapsed=10211.9s rate=2 rows/s
+[feeder] pack=5.8s write=10072.4s other=133.8s
+Exception ignored in: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+BrokenPipeError: [Errno 32] Broken pipe

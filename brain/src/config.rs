@@ -23,6 +23,8 @@ pub const WINDOW_SIZES: [usize; N_LAYER] = [
     256, 256, 256, 256, 2048,
 ];
 
+pub const CE_CHUNK: usize = 4096;
+
 pub fn has_ve(layer: usize) -> bool {
     matches!(layer, 1 | 3 | 5 | 7)
 }

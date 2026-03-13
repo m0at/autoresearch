@@ -106,16 +106,14 @@ pub struct BufferManager {
     pub attn_out: CudaSlice<bf16>, // [B, T, D_MODEL]
     pub h: CudaSlice<bf16>,        // [B*T, MLP_DIM]
     pub h_act: CudaSlice<bf16>,    // [B*T, MLP_DIM]
-    pub logits: CudaSlice<bf16>,   // [B*T, VOCAB]
+    pub logits: CudaSlice<bf16>,   // [CE_CHUNK, VOCAB]
     pub loss: CudaSlice<f32>,      // [1]
 
     // ── Saved for backward (per-layer) ──
     pub saved_x_pre_attn_norm: Vec<CudaSlice<bf16>>,  // [N_LAYER] x [B, T, D_MODEL]
     pub saved_x_pre_mlp_norm: Vec<CudaSlice<bf16>>,   // [N_LAYER] x [B, T, D_MODEL]
-    pub saved_h_pre_act: Vec<CudaSlice<bf16>>,         // [N_LAYER] x [B*T, MLP_DIM]
+
     pub saved_xn: Vec<CudaSlice<bf16>>,                // [N_LAYER] x [B*T, D_MODEL]  normed (for dW)
-    pub saved_q: Vec<CudaSlice<bf16>>,                 // [N_LAYER] x [B*T, D_MODEL]
-    pub saved_k: Vec<CudaSlice<bf16>>,                 // [N_LAYER] x [B*T, D_MODEL]
     pub saved_v: Vec<CudaSlice<bf16>>,                 // [N_LAYER] x [B*T, D_MODEL]
     pub saved_attn_out: Vec<CudaSlice<bf16>>,          // [N_LAYER] x [B*T, D_MODEL]
     pub saved_softmax_lse: Vec<CudaSlice<f32>>,       // [N_LAYER] x [B, N_HEAD, SEQ] flash attn LSE
@@ -128,7 +126,7 @@ pub struct BufferManager {
     pub d_v: CudaSlice<bf16>,      // [B*T, D_MODEL]
     pub d_qkv: CudaSlice<bf16>,    // [3*B*T, D_MODEL] packed [d_q|d_k|d_v] for batched bwd
     pub d_h: CudaSlice<bf16>,      // [B*T, MLP_DIM]
-    pub d_logits: CudaSlice<bf16>, // [B*T, VOCAB]
+    pub d_logits: CudaSlice<bf16>, // [CE_CHUNK, VOCAB]
     pub d_xn: CudaSlice<bf16>,     // [B*T, D_MODEL]  scratch for 3-way add
 
     // ── Flash attention backward scratch (f32) ──
@@ -147,12 +145,6 @@ pub struct BufferManager {
     pub input_ids_b: CudaSlice<u32>, // [B, T] double-buffer for async H2D
     pub targets_b: CudaSlice<u32>,   // [B, T] double-buffer for async H2D
 
-    // ── Dynamic layer importance ──
-    pub layer_act_norms: CudaSlice<f32>,      // [N_LAYER] MLP output L2 norm per layer
-    pub layer_neuron_act_norms: CudaSlice<f32>,  // [N_LAYER × MLP_DIM] per-neuron mean abs activation
-    pub layer_grad_norms: CudaSlice<f32>,     // [N_LAYER] gradient L2 norm per layer (train)
-    pub layer_val_grad_norms: CudaSlice<f32>, // [N_LAYER] gradient L2 norm per layer (val)
-    pub layer_dynamic_scale: CudaSlice<f32>,  // [N_LAYER] learned importance scale, init=1.0
 }
 
 fn alloc<T: cudarc::driver::DeviceRepr + ValidAsZeroBits>(
@@ -305,25 +297,21 @@ impl BufferManager {
         let attn_out = alloc_bf16(&stream, bt * d)?;
         let h = alloc_bf16(&stream, bt * mlp)?;
         let h_act = alloc_bf16(&stream, bt * mlp)?;
-        let logits = alloc_bf16(&stream, bt * VOCAB)?;
+        let logits = alloc_bf16(&stream, CE_CHUNK * VOCAB)?;
         let loss = alloc_f32(&stream, 1)?;
 
         // ── Saved for backward ──
         let mut saved_x_pre_attn_norm = Vec::with_capacity(N_LAYER);
         let mut saved_x_pre_mlp_norm = Vec::with_capacity(N_LAYER);
-        let mut saved_h_pre_act = Vec::with_capacity(N_LAYER);
+
         let mut saved_xn = Vec::with_capacity(N_LAYER);
-        let mut saved_q = Vec::with_capacity(N_LAYER);
-        let mut saved_k = Vec::with_capacity(N_LAYER);
         let mut saved_v = Vec::with_capacity(N_LAYER);
         let mut saved_attn_out = Vec::with_capacity(N_LAYER);
         for _ in 0..N_LAYER {
             saved_x_pre_attn_norm.push(alloc_bf16(&stream, bt * d)?);
             saved_x_pre_mlp_norm.push(alloc_bf16(&stream, bt * d)?);
-            saved_h_pre_act.push(alloc_bf16(&stream, bt * mlp)?);
+
             saved_xn.push(alloc_bf16(&stream, bt * d)?);
-            saved_q.push(alloc_bf16(&stream, bt * d)?);
-            saved_k.push(alloc_bf16(&stream, bt * d)?);
             saved_v.push(alloc_bf16(&stream, bt * d)?);
             saved_attn_out.push(alloc_bf16(&stream, bt * d)?);
         }
@@ -340,7 +328,7 @@ impl BufferManager {
         let d_v = alloc_bf16(&stream, bt * d)?;
         let d_qkv = alloc_bf16(&stream, 3 * bt * d)?;
         let d_h = alloc_bf16(&stream, bt * mlp)?;
-        let d_logits = alloc_bf16(&stream, bt * VOCAB)?;
+        let d_logits = alloc_bf16(&stream, CE_CHUNK * VOCAB)?;
         let d_xn = alloc_bf16(&stream, bt * d)?;
 
         // ── Flash attention backward scratch (f32) ──
@@ -360,16 +348,6 @@ impl BufferManager {
         let targets = alloc_u32(&stream, bt)?;
         let input_ids_b = alloc_u32(&stream, bt)?;
         let targets_b = alloc_u32(&stream, bt)?;
-
-        // ── Dynamic layer importance ──
-        let layer_act_norms = alloc_f32(&stream, N_LAYER)?;
-        let layer_neuron_act_norms = alloc_f32(&stream, N_LAYER * MLP_DIM)?;
-        let layer_grad_norms = alloc_f32(&stream, N_LAYER)?;
-        let layer_val_grad_norms = alloc_f32(&stream, N_LAYER)?;
-        // Initialize dynamic_scale to 1.0 (alloc_zeros gives 0.0, need 1.0)
-        let layer_dynamic_scale_host = vec![1.0f32; N_LAYER];
-        let mut layer_dynamic_scale = alloc_f32(&stream, N_LAYER)?;
-        stream.memcpy_htod(&layer_dynamic_scale_host, &mut layer_dynamic_scale)?;
 
         Ok(Self {
             stream,
@@ -404,10 +382,8 @@ impl BufferManager {
             loss,
             saved_x_pre_attn_norm,
             saved_x_pre_mlp_norm,
-            saved_h_pre_act,
+
             saved_xn,
-            saved_q,
-            saved_k,
             saved_v,
             saved_attn_out,
             saved_softmax_lse,
@@ -431,11 +407,6 @@ impl BufferManager {
             targets,
             input_ids_b,
             targets_b,
-            layer_act_norms,
-            layer_neuron_act_norms,
-            layer_grad_norms,
-            layer_val_grad_norms,
-            layer_dynamic_scale,
         })
     }
 
@@ -549,14 +520,12 @@ impl BufferManager {
         total += 9 * bt * d * bf16_sz;
         total += bt * N_KV_HEAD * bf16_sz; // gate
         total += 2 * bt * mlp * bf16_sz;   // h, h_act
-        total += bt * VOCAB * bf16_sz;     // logits
+        total += CE_CHUNK * VOCAB * bf16_sz; // logits (chunked CE)
         total += f32_sz;                   // loss
 
         // Saved for backward (per-layer)
-        // x_pre_attn_norm, x_pre_mlp_norm, xn, q, k, v, attn_out = 7 * N_LAYER * bt*d
-        total += 7 * N_LAYER * bt * d * bf16_sz;
-        // h_pre_act = N_LAYER * bt * mlp
-        total += N_LAYER * bt * mlp * bf16_sz;
+        // x_pre_attn_norm, x_pre_mlp_norm, xn, v, attn_out = 5 * N_LAYER * bt*d
+        total += 5 * N_LAYER * bt * d * bf16_sz;
         // softmax_lse = N_LAYER * b * N_HEAD * t
         total += N_LAYER * b * N_HEAD * t * f32_sz;
 
@@ -564,7 +533,7 @@ impl BufferManager {
         // d_x, d_x0, d_q, d_k, d_v, d_xn = 6 * bt*d
         total += 6 * bt * d * bf16_sz;
         total += bt * mlp * bf16_sz;   // d_h
-        total += bt * VOCAB * bf16_sz; // d_logits
+        total += CE_CHUNK * VOCAB * bf16_sz; // d_logits (chunked CE)
         // Flash attention backward scratch (f32)
         total += b * N_HEAD * t * HEAD_DIM * f32_sz; // flash_dq_accum
         total += b * N_HEAD * t * f32_sz;             // flash_dsoftmax_sum
@@ -615,8 +584,8 @@ mod tests {
         assert!(weight_mb > 0.0, "weight_mb must be positive");
         assert!(weight_mb < 2048.0, "weight_mb {weight_mb:.1} unreasonably large");
 
-        // Verify saved-for-backward: 7*N_LAYER*bt*d + N_LAYER*bt*mlp
-        let saved_elems = 7 * N_LAYER * bt * d + N_LAYER * bt * mlp;
+        // Verify saved-for-backward: 5*N_LAYER*bt*d (q/k removed — recomputed in bwd)
+        let saved_elems = 5 * N_LAYER * bt * d;
         let saved_bytes = saved_elems * bf16_sz;
         let saved_mb = saved_bytes as f64 / (1024.0 * 1024.0);
         assert!(saved_mb > 0.0);

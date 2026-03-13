@@ -33,17 +33,16 @@ fn dptr_at<T>(buf: &CudaSlice<T>, offset: usize) -> CUdeviceptr {
 /// # Forward-pass buffer contract
 ///
 /// The forward pass must populate:
-/// - `bufs.logits` -- raw pre-softcap logits (softcap is fused into cross_entropy kernels)
 /// - `bufs.targets`
+/// - (logits are recomputed per-chunk in the CE backward loop)
 /// - `bufs.emb` -- embedding output
 /// - `bufs.x` -- final hidden state (pre-final-norm, post-last-layer)
 /// - `bufs.x0` -- initial hidden state (= rms_norm(emb), immutable after init)
 /// - `bufs.saved_x_pre_attn_norm[i]` -- x before residual_scale at layer i
 /// - `bufs.saved_x_pre_mlp_norm[i]` -- x before MLP layer-norm at layer i
 /// - `bufs.saved_xn[i]` -- attention-normed xn at layer i (for QKV/VE-gate dW)
-/// - `bufs.saved_h_pre_act[i]` -- MLP pre-activation h at layer i
-/// - `bufs.saved_q[i]` -- q after RoPE + QK-norm (passed to flash attn fwd)
-/// - `bufs.saved_k[i]` -- k after RoPE + QK-norm
+/// - (h_pre_act recomputed from saved_x_pre_mlp_norm via rms_norm + FC1)
+/// - (q/k recomputed in backward from saved_xn via wq/wk + fused_rope_rms_norm)
 /// - `bufs.saved_v[i]` -- v after VE-apply (if applicable)
 /// - `bufs.saved_attn_out[i]` -- flash attention output (pre-Wo projection)
 /// - `bufs.saved_softmax_lse[i]` -- flash attention log-sum-exp (f32)
@@ -63,36 +62,7 @@ pub fn backward(bufs: &mut BufferManager, gemm: &GemmRunner, grad_accum_steps: u
     //  Post-loop backward
     // =====================================================================
 
-    // 1. cross_entropy_bwd (with fused softcap): raw logits, targets --> d_logits
-    //    The kernel applies softcap in f32 internally and folds the softcap
-    //    derivative (1 - tanh^2) into the gradient, matching Python's .float() cast.
-    //    grad_res = 1 / (bt * grad_accum_steps) to match Python's
-    //    `loss = loss / grad_accum_steps` followed by mean-reduction CE.
-    let grad_scale = 1.0f32 / (bt * grad_accum_steps) as f32;
-    let grad_res_ptr = dptr(&bufs.h_act);
-    unsafe {
-        // Fill bt f32 words with grad_scale (async on stream)
-        cudarc::driver::sys::cuMemsetD32Async(
-            grad_res_ptr,
-            grad_scale.to_bits(),
-            bt,
-            bufs.stream.cu_stream(),
-        );
-        ffi::fused_cross_entropy_bwd(
-            dptr(&bufs.logits) as *const c_void,
-            dptr(&bufs.targets) as *const c_void,
-            grad_res_ptr as *const c_void,
-            dptr(&bufs.d_logits) as *mut c_void,
-            bt as u32, VOCAB as u32,
-            SOFTCAP, stream,
-        );
-    }
-
-    // 2. LM head dX: d_logits(BT, VOCAB) @ lm_head(VOCAB, D_MODEL) --> d_xn(BT, D_MODEL)
-    gemm.matmul_bwd_x(&bufs.d_logits, &bufs.lm_head, &mut bufs.d_xn, bt, VOCAB, D_MODEL);
-
-    // 3. LM head dW: d_logits^T @ xn_final --> d_lm_head (accumulate)
-    //    Recompute xn_final = rms_norm(bufs.x) into bufs.xn.
+    // Recompute xn_final = rms_norm(bufs.x) into bufs.xn (needed for lm_head dW).
     unsafe {
         ffi::fused_rms_norm_fwd(
             dptr(&bufs.x) as *const c_void,
@@ -100,9 +70,82 @@ pub fn backward(bufs: &mut BufferManager, gemm: &GemmRunner, grad_accum_steps: u
             bt as u32, D_MODEL as u32, EPS, stream,
         );
     }
-    gemm.matmul_acc(&bufs.d_logits, &bufs.xn, &mut bufs.lm_head_grad, bt, VOCAB, D_MODEL);
 
-    // 4. rms_norm_bwd (final norm): x_pre_norm=bufs.x, grad=d_xn --> d_x
+    // [CHUNKED CE BWD + LM HEAD BWD] Process CE_CHUNK tokens at a time.
+    // For each chunk:
+    //   (a) Recompute logits chunk: xn[offset..] @ lm_head^T -> logits (CE_CHUNK buf)
+    //   (b) CE bwd: logits, targets[offset..] -> d_logits (CE_CHUNK buf)
+    //   (c) LM head dX: d_logits @ lm_head -> d_xn[offset..] (beta=0, non-overlapping)
+    //   (d) LM head dW: d_logits^T @ xn[offset..] -> d_lm_head (accumulate)
+    let grad_scale = 1.0f32 / (bt * grad_accum_steps) as f32;
+    {
+        let handle = *gemm.blas().handle();
+        let logits_ptr = dptr(&bufs.logits);
+        let d_logits_ptr = dptr(&bufs.d_logits);
+        let lm_head_ptr = dptr(&bufs.lm_head);
+        let lm_head_grad_ptr = dptr(&bufs.lm_head_grad);
+        let xn_base = dptr(&bufs.xn);
+        let d_xn_base = dptr(&bufs.d_xn);
+        let targets_base = dptr(&bufs.targets);
+        let grad_res_ptr = dptr(&bufs.h_act);
+        let d = D_MODEL;
+
+        let mut offset = 0usize;
+        while offset < bt {
+            let cur = CE_CHUNK.min(bt - offset);
+            let xn_off = xn_base + (offset * d * std::mem::size_of::<bf16>()) as u64;
+            let d_xn_off = d_xn_base + (offset * d * std::mem::size_of::<bf16>()) as u64;
+            let targets_off = targets_base + (offset * std::mem::size_of::<i32>()) as u64;
+            let grad_res_off = grad_res_ptr + (offset * std::mem::size_of::<f32>()) as u64;
+
+            // (a) Recompute logits: xn[offset..][cur, d] @ lm_head[VOCAB, d]^T -> logits[cur, VOCAB]
+            unsafe {
+                crate::forward::raw_gemm_matmul(
+                    handle, xn_off, lm_head_ptr, logits_ptr,
+                    cur, VOCAB, d, 0.0,
+                );
+            }
+
+            // (b) CE bwd: logits, targets -> d_logits
+            //     grad_res scratch at h_act[offset..] filled with grad_scale
+            unsafe {
+                cudarc::driver::sys::cuMemsetD32Async(
+                    grad_res_off,
+                    grad_scale.to_bits(),
+                    cur,
+                    bufs.stream.cu_stream(),
+                );
+                ffi::fused_cross_entropy_bwd(
+                    logits_ptr as *const c_void,
+                    targets_off as *const c_void,
+                    grad_res_off as *const c_void,
+                    d_logits_ptr as *mut c_void,
+                    cur as u32, VOCAB as u32,
+                    SOFTCAP, stream,
+                );
+            }
+
+            // (c) LM head dX: d_logits[cur, VOCAB] @ lm_head[VOCAB, d] -> d_xn[offset..][cur, d]
+            unsafe {
+                crate::forward::raw_gemm_bwd_x(
+                    handle, d_logits_ptr, lm_head_ptr, d_xn_off,
+                    cur, VOCAB, d, 0.0,
+                );
+            }
+
+            // (d) LM head dW: d_logits[cur, VOCAB]^T @ xn[offset..][cur, d] -> d_lm_head (accumulate)
+            unsafe {
+                crate::forward::raw_gemm_matmul_acc(
+                    handle, d_logits_ptr, xn_off, lm_head_grad_ptr,
+                    cur, VOCAB, d,
+                );
+            }
+
+            offset += cur;
+        }
+    }
+
+    // rms_norm_bwd (final norm): x_pre_norm=bufs.x, grad=d_xn --> d_x
     unsafe {
         ffi::fused_rms_norm_bwd(
             dptr(&bufs.x) as *const c_void,
@@ -124,10 +167,25 @@ pub fn backward(bufs: &mut BufferManager, gemm: &GemmRunner, grad_accum_steps: u
         //  MLP backward
         // =================================================================
 
-        // Recompute h_act = relu_sq(saved_h_pre_act) into bufs.h (scratch)
+        // Recompute MLP-normed xn = rms_norm(saved_x_pre_mlp_norm) into bufs.xn
+        unsafe {
+            ffi::fused_rms_norm_fwd(
+                dptr(&bufs.saved_x_pre_mlp_norm[layer]) as *const c_void,
+                dptr(&bufs.xn) as *mut c_void,
+                bt as u32, D_MODEL as u32, EPS, stream,
+            );
+        }
+
+        // Recompute h_pre_act = xn @ Wfc into bufs.d_h (scratch, [BT, MLP_DIM])
+        gemm.matmul(
+            &bufs.xn, &bufs.layer_weights[layer].wfc,
+            &mut bufs.d_h, bt, MLP_DIM, D_MODEL,
+        );
+
+        // Recompute h_act = relu_sq(h_pre_act) into bufs.h (scratch)
         unsafe {
             ffi::relu_sq_fwd(
-                dptr(&bufs.saved_h_pre_act[layer]) as *const c_void,
+                dptr(&bufs.d_h) as *const c_void,
                 dptr(&bufs.h) as *mut c_void,
                 n_mlp, stream,
             );
@@ -139,22 +197,13 @@ pub fn backward(bufs: &mut BufferManager, gemm: &GemmRunner, grad_accum_steps: u
         // FC2 dX: d_x(BT, D_MODEL) @ Wdn(D_MODEL, MLP_DIM) --> d_h_act(BT, MLP_DIM)
         gemm.matmul_bwd_x(&bufs.d_x, &bufs.layer_weights[layer].wdn, &mut bufs.h_act, bt, D_MODEL, MLP_DIM);
 
-        // relu_sq_bwd: d_h_act, saved_h_pre_act --> d_h
+        // relu_sq_bwd: d_h_act, h_pre_act(bufs.d_h) --> d_h (overwrites bufs.d_h in-place)
         unsafe {
             ffi::relu_sq_bwd(
-                dptr(&bufs.saved_h_pre_act[layer]) as *const c_void,
+                dptr(&bufs.d_h) as *const c_void,
                 dptr(&bufs.h_act) as *const c_void,
                 dptr(&bufs.d_h) as *mut c_void,
                 n_mlp, stream,
-            );
-        }
-
-        // Recompute MLP-normed xn = rms_norm(saved_x_pre_mlp_norm) into bufs.xn
-        unsafe {
-            ffi::fused_rms_norm_fwd(
-                dptr(&bufs.saved_x_pre_mlp_norm[layer]) as *const c_void,
-                dptr(&bufs.xn) as *mut c_void,
-                bt as u32, D_MODEL as u32, EPS, stream,
             );
         }
 
@@ -164,16 +213,6 @@ pub fn backward(bufs: &mut BufferManager, gemm: &GemmRunner, grad_accum_steps: u
         // FC1 dX: d_h(BT, MLP_DIM) @ Wfc(MLP_DIM, D_MODEL) --> d_xn(BT, D_MODEL)
         gemm.matmul_bwd_x(&bufs.d_h, &bufs.layer_weights[layer].wfc, &mut bufs.d_xn, bt, MLP_DIM, D_MODEL);
 
-        // [LAYER STAT] Capture gradient norm for dynamic layer importance
-        unsafe {
-            ffi::layer_l2_norm_bf16(
-                dptr(&bufs.d_xn) as *const std::ffi::c_void,
-                (bt * D_MODEL) as i32,
-                dptr(&bufs.layer_grad_norms) as *mut f32,
-                layer as i32,
-                stream,
-            );
-        }
 
         // [FUSED] rms_norm_bwd + residual_add:
         //   d_x += rms_norm_bwd(saved_x_pre_mlp_norm, d_xn)
@@ -202,9 +241,31 @@ pub fn backward(bufs: &mut BufferManager, gemm: &GemmRunner, grad_accum_steps: u
             &mut bufs.attn_out, bt, D_MODEL, D_MODEL,
         );
 
-        // Flash attention v3 backward: d_attn_out, saved q/k/v/out/lse --> d_q, d_k, d_v
-        // FA3 writes dq/dk/dv into packed d_qkv buffer (and also into d_q/d_k/d_v for
-        // downstream QK-norm/RoPE bwd which operate on separate buffers).
+        // Recompute post-RoPE+QKnorm q and k for FA3 backward (avoids saving them)
+        gemm.matmul(&bufs.saved_xn[layer], &bufs.layer_weights[layer].wq, &mut bufs.q, bt, D_MODEL, D_MODEL);
+        unsafe {
+            ffi::fused_rope_rms_norm_fwd(
+                dptr(&bufs.q) as *const c_void,
+                dptr(&bufs.cos) as *const c_void,
+                dptr(&bufs.sin) as *const c_void,
+                dptr(&bufs.q) as *mut c_void,
+                (bt * N_HEAD) as u32,
+                SEQ as u32, N_HEAD as u32, HEAD_DIM as u32, EPS, stream,
+            );
+        }
+        gemm.matmul(&bufs.saved_xn[layer], &bufs.layer_weights[layer].wk, &mut bufs.k, bt, D_MODEL, D_MODEL);
+        unsafe {
+            ffi::fused_rope_rms_norm_fwd(
+                dptr(&bufs.k) as *const c_void,
+                dptr(&bufs.cos) as *const c_void,
+                dptr(&bufs.sin) as *const c_void,
+                dptr(&bufs.k) as *mut c_void,
+                (bt * N_KV_HEAD) as u32,
+                SEQ as u32, N_KV_HEAD as u32, HEAD_DIM as u32, EPS, stream,
+            );
+        }
+
+        // Flash attention v3 backward: d_attn_out, recomputed q/k, saved v/out/lse --> d_q, d_k, d_v
         // Zero flash scratch buffers
         crate::forward::raw_zero(&bufs.stream, &mut bufs.flash_dq_accum);
         crate::forward::raw_zero(&bufs.stream, &mut bufs.flash_dsoftmax_sum);
@@ -228,8 +289,8 @@ pub fn backward(bufs: &mut BufferManager, gemm: &GemmRunner, grad_accum_steps: u
             unsafe {
                 ffi::run_mha_backward_v3(
                     dptr(&bufs.attn_out) as *mut _,         // dout (grad of attn output)
-                    dptr(&bufs.saved_q[layer]) as *mut _,   // q
-                    dptr(&bufs.saved_k[layer]) as *mut _,   // k
+                    dptr(&bufs.q) as *mut _,                // q (recomputed)
+                    dptr(&bufs.k) as *mut _,                // k (recomputed)
                     dptr(&bufs.saved_v[layer]) as *mut _,   // v
                     dptr(&bufs.saved_attn_out[layer]) as *mut _, // out (forward output)
                     dptr(&bufs.saved_softmax_lse[layer]) as *mut _, // softmax_lse

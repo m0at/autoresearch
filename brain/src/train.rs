@@ -332,8 +332,9 @@ const ROW_LEN: usize = SEQ + 1; // 2049 tokens per row
 const ROW_BYTES: usize = ROW_LEN * 2;
 
 // How many parsed batches to keep buffered ahead of the GPU.
-// At ~520ms/step this is ~16s of look-ahead — enough to absorb any feeder jitter.
-const STDIN_PREFETCH_BATCHES: usize = 32;
+// At B=128, each batch is ~512KB. 16 batches ≈ 8MB of look-ahead,
+// enough to absorb feeder jitter at ~520ms/step.
+const STDIN_PREFETCH_BATCHES: usize = 16;
 
 /// Stdin loader with a background reader thread.
 ///
@@ -620,7 +621,7 @@ pub struct TrainConfig {
 impl Default for TrainConfig {
     fn default() -> Self {
         Self {
-            device_batch_size: 64,
+            device_batch_size: 128,
             total_batch_size: 524288,
             load_checkpoint: None,
             diagnostic_steps: None,
@@ -1487,51 +1488,6 @@ fn eval_bpb(
     Ok(total_nats / (2.0_f64.ln() * total_bytes as f64))
 }
 
-// ---------------------------------------------------------------------------
-// Val gradient norm capture (for generalization-aware layer scoring)
-// ---------------------------------------------------------------------------
-
-/// Run forward + backward on one val batch and copy the resulting per-layer
-/// gradient norms into `bufs.layer_val_grad_norms`. Weight gradients are zeroed
-/// before and after so training state is unaffected.
-fn capture_val_grad_norms(
-    stream: &Arc<CudaStream>,
-    bufs: &mut BufferManager,
-    gemm: &GemmRunner,
-    config: &TrainConfig,
-) -> Result<()> {
-    // Load one val batch.
-    let data_path = std::path::Path::new(&config.data_dir);
-    let mut val_loader = ShardDataLoader::new_val(
-        data_path,
-        config.device_batch_size,
-        if config.stream_input { None } else { config.num_train_shards },
-    )?;
-    let (inp, tgt) = val_loader.next_batch();
-    stream.memcpy_htod(&inp, &mut bufs.input_ids)?;
-    stream.memcpy_htod(&tgt, &mut bufs.targets)?;
-
-    // Zero grads before the val backward so accumulation starts clean.
-    bufs.zero_gradients()?;
-
-    // Forward (training path — saves activations needed for backward).
-    crate::forward::forward(bufs, gemm);
-
-    // Backward — writes layer_grad_norms (train buffer) as a side effect.
-    // grad_accum_steps=1 since we are doing a single batch.
-    crate::backward::backward(bufs, gemm, 1);
-
-    // Copy layer_grad_norms → layer_val_grad_norms via CPU round-trip.
-    // Only happens every eval_interval steps so the overhead is negligible.
-    stream.synchronize()?;
-    let val_norms = read_f32_buf(stream, &bufs.layer_grad_norms);
-    stream.memcpy_htod(&val_norms, &mut bufs.layer_val_grad_norms)?;
-
-    // Zero weight gradients so the next training step starts clean.
-    bufs.zero_gradients()?;
-
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // Checkpoint save / load (safetensors format)

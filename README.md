@@ -4,6 +4,11 @@ A Rust + CUDA GPT training engine built on top of Karpathy's `autoresearch` fram
 
 ---
 
+![val_bpb comparison](brain_vs_karpathy.png)
+
+
+
+
 ## TL;DR
 
 Karpathy published a small GPT training run in Python + PyTorch (`karpathy/autoresearch`). We rebuilt the training engine from scratch in Rust and CUDA — no Python in the training loop, no PyTorch, no autograd framework. Every forward pass, backward pass, and optimizer step is hand-written. The binary links only against CUDA, cuBLAS, and Flash Attention 3.
@@ -12,11 +17,15 @@ At identical settings, the Python reference run scores **0.992095 bpb** at 1000 
 
 ---
 
+
+
 ## What is val_bpb?
 
 **Bits per byte on held-out validation data.** Lower is better — the model needs fewer bits to encode each byte of unseen text, meaning it generalizes better. It is a direct measure of generalization, not memorization. We optimize exclusively for this at a fixed compute budget (1000 optimizer steps, 524,288 tokens/step, 1× H100 SXM).
 
 ---
+
+
 
 ## Results
 
@@ -142,6 +151,8 @@ Karpathy's original Python engine (`karpathy/autoresearch`), run to 1000 steps w
 
 ---
 
+
+
 ## Why These Parameters
 
 Every hyperparameter below was either measured directly or derived from a confirmed finding. This section explains the reasoning so future work can be targeted rather than blind.
@@ -212,6 +223,8 @@ All experiments use seed=42 for weight initialization and data ordering. This co
 
 ---
 
+
+
 ## Architecture
 
 | Component | Value | Rationale |
@@ -231,6 +244,8 @@ All experiments use seed=42 for weight initialization and data ordering. This co
 | Activation | ReLU² | squared ReLU, sparse and fast |
 
 ---
+
+
 
 ## Training Setup
 
@@ -256,6 +271,8 @@ Override via env var: `PEAK_LR`, `COOLDOWN_STEPS`, `MAX_STEPS`, `EMBEDDING_LR`, 
 
 ---
 
+
+
 ## Data Pipeline
 
 ```bash
@@ -272,6 +289,8 @@ NUM_TRAIN_SHARDS=794 python3 brain/feeder.py --stream --prefetch 4 2>/tmp/feeder
 
 ---
 
+
+
 ## Neuron Rinsing (dynamic-layer-importance branch)
 
 A dynamic layer importance system that tracks per-layer gradient and activation norms, suppresses low-signal layers in real time, and periodically reinitializes dead layers.
@@ -285,6 +304,8 @@ A dynamic layer importance system that tracks per-layer gradient and activation 
 Impact on val_bpb: **pending** (neuron rinsing study queued after clean LR sweep completes).
 
 ---
+
+
 
 ## Brain (`brain/`)
 
@@ -324,6 +345,8 @@ Build: `bash brain/fa3/build_fa3.sh`
 Link: `FLASH_ATTN_V3_BUILD_DIR=fa3/build cargo build --release`
 
 ---
+
+
 
 ## Instance Operations
 
@@ -442,6 +465,8 @@ NUM_TRAIN_SHARDS=794 autoresearch-engine train ...
 
 ---
 
+
+
 ## Build & Run
 
 **Build (on H100 build instance):**
@@ -459,6 +484,8 @@ scp -P <run-port> target/release/autoresearch-engine root@<run-host>:/root/autor
 ```
 
 ---
+
+
 
 ## Kernel Optimization Roadmap
 
@@ -494,6 +521,8 @@ These changes are purely mechanical (no model changes, no hyperparameter impact)
 
 ---
 
+
+
 ## Future Work (post-publication)
 
 ### Full single-epoch run
@@ -527,6 +556,8 @@ cat <(python3 feeder.py --stream) <(python3 feeder.py --jsonl custom.jsonl) \
 The engine is agnostic to data source — it reads the binary row protocol from stdin regardless of origin. Any text data tokenizable with the included BPE tokenizer can be mixed in without code changes.
 
 ---
+
+
 
 ## Vast.ai Instances
 

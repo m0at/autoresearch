@@ -1,0 +1,100 @@
+#include <cuda_bf16.h>
+#include <cuda_runtime.h>
+#include <stdint.h>
+
+// ── Pair-based RoPE forward ─────────────────────────────────────────────────
+// Each thread processes both d and d+half_d of one head together.
+// In-place safe without __syncthreads: each (lo,hi) pair is owned by exactly
+// one thread, so no read-write conflicts.
+
+__global__ void fused_rope_fwd_kernel(
+    const __nv_bfloat16* __restrict__ x,
+    const __nv_bfloat16* __restrict__ cos_t,
+    const __nv_bfloat16* __restrict__ sin_t,
+    __nv_bfloat16* __restrict__ out,
+    uint32_t N, uint32_t T, uint32_t n_head, uint32_t hdim)
+{
+    uint32_t half_d = hdim / 2;
+    uint32_t N_pairs = N / 2;
+
+    for (uint32_t pid = blockIdx.x * blockDim.x + threadIdx.x; pid < N_pairs;
+         pid += blockDim.x * gridDim.x) {
+        uint32_t hb = pid / half_d;
+        uint32_t d  = pid % half_d;
+        uint32_t pos_lo = hb * hdim + d;
+        uint32_t pos_hi = pos_lo + half_d;
+        uint32_t t = (hb / n_head) % T;
+        uint32_t cs_idx = t * half_d + d;
+
+        float c = __bfloat162float(cos_t[cs_idx]);
+        float s = __bfloat162float(sin_t[cs_idx]);
+        float v_lo = __bfloat162float(x[pos_lo]);
+        float v_hi = __bfloat162float(x[pos_hi]);
+
+        out[pos_lo] = __float2bfloat16(v_lo * c + v_hi * s);
+        out[pos_hi] = __float2bfloat16(-v_lo * s + v_hi * c);
+    }
+}
+
+// ── Pair-based RoPE backward ────────────────────────────────────────────────
+// RoPE bwd is R^T applied to grad: dx = [cos -sin; sin cos]^T * dy
+// Each thread handles the (lo,hi) pair, reading each grad value once.
+
+__global__ void fused_rope_bwd_kernel(
+    const __nv_bfloat16* __restrict__ grad_out,
+    const __nv_bfloat16* __restrict__ cos_t,
+    const __nv_bfloat16* __restrict__ sin_t,
+    __nv_bfloat16* __restrict__ grad_in,
+    uint32_t N, uint32_t T, uint32_t n_head, uint32_t hdim)
+{
+    uint32_t half_d = hdim / 2;
+    uint32_t N_pairs = N / 2;
+
+    for (uint32_t pid = blockIdx.x * blockDim.x + threadIdx.x; pid < N_pairs;
+         pid += blockDim.x * gridDim.x) {
+        uint32_t hb = pid / half_d;
+        uint32_t d  = pid % half_d;
+        uint32_t pos_lo = hb * hdim + d;
+        uint32_t pos_hi = pos_lo + half_d;
+        uint32_t t = (hb / n_head) % T;
+        uint32_t cs_idx = t * half_d + d;
+
+        float c = __bfloat162float(cos_t[cs_idx]);
+        float s = __bfloat162float(sin_t[cs_idx]);
+        float g_lo = __bfloat162float(grad_out[pos_lo]);
+        float g_hi = __bfloat162float(grad_out[pos_hi]);
+
+        grad_in[pos_lo] = __float2bfloat16(g_lo * c - g_hi * s);
+        grad_in[pos_hi] = __float2bfloat16(g_lo * s + g_hi * c);
+    }
+}
+
+// ── C entry points ──────────────────────────────────────────────────────────
+
+extern "C" void fused_rope_fwd(
+    const void* x, const void* cos_t, const void* sin_t, void* out,
+    uint32_t N, uint32_t T, uint32_t n_head, uint32_t hdim, cudaStream_t stream)
+{
+    uint32_t threads = 512;
+    uint32_t n_pairs = N / 2;
+    uint32_t blocks = (n_pairs + threads - 1) / threads;
+    if (blocks > 2048) blocks = 2048;
+    fused_rope_fwd_kernel<<<blocks, threads, 0, stream>>>(
+        (const __nv_bfloat16*)x, (const __nv_bfloat16*)cos_t,
+        (const __nv_bfloat16*)sin_t, (__nv_bfloat16*)out,
+        N, T, n_head, hdim);
+}
+
+extern "C" void fused_rope_bwd(
+    const void* grad_out, const void* cos_t, const void* sin_t, void* grad_in,
+    uint32_t N, uint32_t T, uint32_t n_head, uint32_t hdim, cudaStream_t stream)
+{
+    uint32_t threads = 512;
+    uint32_t n_pairs = N / 2;
+    uint32_t blocks = (n_pairs + threads - 1) / threads;
+    if (blocks > 2048) blocks = 2048;
+    fused_rope_bwd_kernel<<<blocks, threads, 0, stream>>>(
+        (const __nv_bfloat16*)grad_out, (const __nv_bfloat16*)cos_t,
+        (const __nv_bfloat16*)sin_t, (__nv_bfloat16*)grad_in,
+        N, T, n_head, hdim);
+}

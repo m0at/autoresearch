@@ -1,0 +1,18 @@
+[package]
+name = "autoresearch-brain"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cudarc = { version = "0.19", default-features = false, features = ["std", "cublas", "driver", "nvrtc", "f16", "fallback-dynamic-loading", "cuda-version-from-build-system", "fallback-latest"] }
+half = { version = "2.5", features = ["num-traits"] }
+anyhow = "1"
+safetensors = "0.4"
+reqwest = { version = "0.12", features = ["blocking"] }
+parquet = "54"
+fancy-regex = "0.14"
+base64 = "0.22"
+rayon = "1"
+
+[build-dependencies]
+cc = "1"

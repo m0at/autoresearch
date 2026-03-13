@@ -61,27 +61,29 @@ pub unsafe fn raw_gemm_matmul(
     beta: f32,
 ) {
     let alpha: f32 = 1.0;
-    sys::cublasGemmEx(
-        handle,
-        cublasOperation_t::CUBLAS_OP_T,  // transa
-        cublasOperation_t::CUBLAS_OP_N,  // transb
-        n as i32,                         // m_cublas
-        m as i32,                         // n_cublas
-        k as i32,                         // k_cublas
-        &alpha as *const f32 as *const _,
-        w_ptr as *const _,
-        sys::cudaDataType_t::CUDA_R_16BF,
-        k as i32,                         // lda
-        x_ptr as *const _,
-        sys::cudaDataType_t::CUDA_R_16BF,
-        k as i32,                         // ldb
-        &beta as *const f32 as *const _,
-        y_ptr as *mut _,
-        sys::cudaDataType_t::CUDA_R_16BF,
-        n as i32,                         // ldc
-        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
-        sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
-    );
+    unsafe {
+        sys::cublasGemmEx(
+            handle,
+            cublasOperation_t::CUBLAS_OP_T,  // transa
+            cublasOperation_t::CUBLAS_OP_N,  // transb
+            n as i32,                         // m_cublas
+            m as i32,                         // n_cublas
+            k as i32,                         // k_cublas
+            &alpha as *const f32 as *const _,
+            w_ptr as *const _,
+            sys::cudaDataType_t::CUDA_R_16BF,
+            k as i32,                         // lda
+            x_ptr as *const _,
+            sys::cudaDataType_t::CUDA_R_16BF,
+            k as i32,                         // ldb
+            &beta as *const f32 as *const _,
+            y_ptr as *mut _,
+            sys::cudaDataType_t::CUDA_R_16BF,
+            n as i32,                         // ldc
+            sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
+        );
+    }
 }
 
 /// Raw cublasGemmEx: dW(n,k) += dY(m,n)^T @ X(m,k)
@@ -96,27 +98,29 @@ pub unsafe fn raw_gemm_matmul_acc(
 ) {
     let alpha: f32 = 1.0;
     let beta: f32 = 1.0;
-    sys::cublasGemmEx(
-        handle,
-        cublasOperation_t::CUBLAS_OP_N,  // transa
-        cublasOperation_t::CUBLAS_OP_T,  // transb
-        k as i32,                         // m_cublas
-        n as i32,                         // n_cublas
-        m as i32,                         // k_cublas
-        &alpha as *const f32 as *const _,
-        x_ptr as *const _,
-        sys::cudaDataType_t::CUDA_R_16BF,
-        k as i32,                         // lda
-        dy_ptr as *const _,
-        sys::cudaDataType_t::CUDA_R_16BF,
-        n as i32,                         // ldb
-        &beta as *const f32 as *const _,
-        dw_ptr as *mut _,
-        sys::cudaDataType_t::CUDA_R_16BF,
-        k as i32,                         // ldc
-        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
-        sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
-    );
+    unsafe {
+        sys::cublasGemmEx(
+            handle,
+            cublasOperation_t::CUBLAS_OP_N,  // transa
+            cublasOperation_t::CUBLAS_OP_T,  // transb
+            k as i32,                         // m_cublas
+            n as i32,                         // n_cublas
+            m as i32,                         // k_cublas
+            &alpha as *const f32 as *const _,
+            x_ptr as *const _,
+            sys::cudaDataType_t::CUDA_R_16BF,
+            k as i32,                         // lda
+            dy_ptr as *const _,
+            sys::cudaDataType_t::CUDA_R_16BF,
+            n as i32,                         // ldb
+            &beta as *const f32 as *const _,
+            dw_ptr as *mut _,
+            sys::cudaDataType_t::CUDA_R_16BF,
+            k as i32,                         // ldc
+            sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
+        );
+    }
 }
 
 /// Raw cublasGemmEx: dX(m,k) = dY(m,n) @ W(n,k)
@@ -131,27 +135,29 @@ pub unsafe fn raw_gemm_bwd_x(
     beta: f32,
 ) {
     let alpha: f32 = 1.0;
-    sys::cublasGemmEx(
-        handle,
-        cublasOperation_t::CUBLAS_OP_N,  // transa
-        cublasOperation_t::CUBLAS_OP_N,  // transb
-        k as i32,                         // m_cublas
-        m as i32,                         // n_cublas
-        n as i32,                         // k_cublas
-        &alpha as *const f32 as *const _,
-        w_ptr as *const _,
-        sys::cudaDataType_t::CUDA_R_16BF,
-        k as i32,                         // lda
-        dy_ptr as *const _,
-        sys::cudaDataType_t::CUDA_R_16BF,
-        n as i32,                         // ldb
-        &beta as *const f32 as *const _,
-        dx_ptr as *mut _,
-        sys::cudaDataType_t::CUDA_R_16BF,
-        k as i32,                         // ldc
-        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
-        sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
-    );
+    unsafe {
+        sys::cublasGemmEx(
+            handle,
+            cublasOperation_t::CUBLAS_OP_N,  // transa
+            cublasOperation_t::CUBLAS_OP_N,  // transb
+            k as i32,                         // m_cublas
+            m as i32,                         // n_cublas
+            n as i32,                         // k_cublas
+            &alpha as *const f32 as *const _,
+            w_ptr as *const _,
+            sys::cudaDataType_t::CUDA_R_16BF,
+            k as i32,                         // lda
+            dy_ptr as *const _,
+            sys::cudaDataType_t::CUDA_R_16BF,
+            n as i32,                         // ldb
+            &beta as *const f32 as *const _,
+            dx_ptr as *mut _,
+            sys::cudaDataType_t::CUDA_R_16BF,
+            k as i32,                         // ldc
+            sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

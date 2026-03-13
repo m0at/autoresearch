@@ -8,16 +8,57 @@ A Rust + CUDA GPT training engine, built from scratch on top of Karpathy's `auto
 
 ![training comparison](training_comparison.png)
 
+---
 
+## Key findings
 
+### Overparameterize, regularize hard, cool down fast
 
-## TL;DR
+The central result of this project is that **deliberately overparameterized models beat compute-optimal models on val_bpb**, even when severely undertrained — if you tune the training recipe for the regime.
 
-Karpathy published a small GPT training run in Python + PyTorch (`karpathy/autoresearch`). We rebuilt the training engine from scratch in Rust and CUDA — no Python in the training loop, no PyTorch, no autograd framework. Every forward pass, backward pass, and optimizer step is hand-written. The binary links only against CUDA, cuBLAS, and Flash Attention 3.
+| Model | Params | Tokens/param | val_bpb | vs Karpathy |
+|-------|--------|-------------|---------|-------------|
+| Karpathy Python baseline | 124M | 4.2 | 0.9922 | — |
+| Rust engine Phase 1 | 119.5M | 4.4 | 0.8673 | −0.125 |
+| **Rust engine Phase 2** | **428M** | **1.2** | **0.5392** | **−0.453** |
 
-**Phase 1 (architecture search):** At identical settings, the Python reference scores **0.9922 bpb** at 1000 steps; our Rust engine with bin-packing alone scores **0.9816 bpb**. Systematic search on 4× H100 SXM swept depth, window size, MLP ratio, init scale, and learning rate, pushing to **0.8673 bpb** — a **0.125 bpb gap** over the Python baseline at 119.5M params.
+The 428M model trains on only 1.2 tokens per parameter — 17× below Chinchilla-optimal — yet crushes both the 119.5M model (which is near Chinchilla-optimal at 4.4 tokens/param) and the Python baseline. Per-token learning efficiency scales with model size even deep into the undertrained regime.
 
-**Phase 2 (scaling up):** Reworked the data pipeline for variable-length contexts (up to 32K tokens), added gradient accumulation support for large models at small batch sizes, and scaled the architecture to **428M params** (D=1024, L=30, MLP=4096, T=32768). With undertraining-aware hyperparameters (higher weight decay, lower peak LR, 30% cooldown), the 428M model reached **0.5392 val_bpb** — a **0.453 bpb improvement** over Karpathy's baseline in the same 1000 steps, despite being heavily undertrained at only 1.2 tokens per parameter.
+This works because of three changes to the training recipe:
+
+1. **Lower peak LR (0.02 vs 0.04)** — prevents the oversized model from memorizing the limited data in early steps.
+2. **Higher weight decay (0.3 vs 0.2)** — aggressive regularization forces the model to learn generalizable features instead of overfitting.
+3. **Short cooldown (30% vs 50%)** — with scarce data, spend maximum time at full LR absorbing signal. This is the opposite of the Phase 1 finding and the most surprising result.
+
+### Cooldown ratio scales with token/param ratio
+
+| Cooldown | Tokens/param | val_bpb | Regime |
+|----------|-------------|---------|--------|
+| 50% | 4.4 (Phase 1, 119.5M) | 0.8600 | Near Chinchilla-optimal |
+| 70% | 1.2 (Phase 2, 428M) | 0.6111 | Undertrained |
+| **30%** | **1.2 (Phase 2, 428M)** | **0.5392** | **Undertrained** |
+
+In the undertrained regime, cooldown is wasted compute — the model hasn't finished learning and you're already decaying the LR. Shorter cooldown = more steps at full LR = more learning. 10% and 20% cooldown ablations are currently running.
+
+### What we relaxed
+
+Phase 1 optimized within Karpathy's fixed compute envelope: 119.5M params, 2048 context, 1000 steps, identical data. The binding constraints were **parameter count** (Chinchilla-optimal at ~120M for 524M tokens) and **context length** (2048, matching the upstream code).
+
+Phase 2 relaxed both:
+- **Parameters:** 119.5M → 428M (3.6×), deliberately overshooting Chinchilla
+- **Context:** 2048 → 32768 (16×), requiring pipeline rework
+- **Batch size:** 64 → 4 (VRAM tradeoff for longer context), compensated by gradient accumulation
+
+What we kept fixed: 1000 optimizer steps, 524,288 tokens/step, single H100, same dataset, same seed.
+
+### In progress
+
+- **Full epoch (8200 steps):** 428M model, 4.3B tokens (~10 tokens/param), 30% cooldown. Step ~575/8200, val_bpb 0.7980 and falling (still at full LR — cooldown doesn't start until step 5740).
+- **Cooldown sweep** on 428M at 1000 steps:
+  - 10% cooldown — step ~550, val_bpb 0.6765
+  - 20% cooldown — step ~575, val_bpb 0.7092
+  - 30% cooldown — completed, final **0.5392** (baseline)
+  - 70% cooldown — completed, final 0.6111
 
 ---
 
@@ -33,17 +74,6 @@ Karpathy published a small GPT training run in Python + PyTorch (`karpathy/autor
 
 ## Results
 
-### Baseline comparison (depth=8, identical hyperparameters)
-
-| Run | val_bpb | steps |
-|-----|---------|-------|
-| Python reference (Karpathy) | 1.0173 | 700 |
-| Rust engine (bin-packing only) | 0.9816 | 700 |
-| gap | −0.036 | |
-| Python reference (Karpathy) | 0.9921 | 1000 |
-
-The entire gap at 700 steps is the data pipeline. Best-fit bin-packing eliminates padding waste so every token in every batch is real training signal. Sequential reads leave up to ~40% of each batch as padding. The 1000-step Python result (0.9921) is the definitive baseline used for all comparisons going forward.
-
 ### Best result comparison (1000 steps, seed=42)
 
 | Run | model | val_bpb |
@@ -54,6 +84,17 @@ The entire gap at 700 steps is the data pipeline. Best-fit bin-packing eliminate
 | **total gap** | | **−0.453** |
 
 Phase 1 gap (0.125 bpb) breaks down as: ~0.011 from bin-packing, ~0.114 from depth=30 vs depth=8, ~0.007 from embedding LR tuning, and residual from LR optimum. Phase 2 gap (additional 0.328 bpb) comes from scaling to 4× wider model with 32K context, enabled by reworking the data pipeline and tuning hyperparameters for the undertrained regime. Same data, same 1000 steps, single H100.
+
+### Baseline comparison (depth=8, identical hyperparameters)
+
+| Run | val_bpb | steps |
+|-----|---------|-------|
+| Python reference (Karpathy) | 1.0173 | 700 |
+| Rust engine (bin-packing only) | 0.9816 | 700 |
+| gap | −0.036 | |
+| Python reference (Karpathy) | 0.9921 | 1000 |
+
+The entire gap at 700 steps is the data pipeline. Best-fit bin-packing eliminates padding waste so every token in every batch is real training signal. Sequential reads leave up to ~40% of each batch as padding.
 
 ### Phase 2 — Scaling experiments (1000 steps, T=32768)
 
@@ -66,9 +107,7 @@ Scaled the model to 428M params (D=1024, 8 heads, MLP=4096) with 32768-token con
 | 70% (700 steps) | 300 | 0.6111 | Too little time at full LR |
 | **30% (300 steps)** | **700** | **0.5392** | **Best — maximizes learning before decay** |
 
-The 30% cooldown wins by 0.072 bpb. In the undertrained regime, the model needs maximum time at full learning rate to absorb the limited data. This is the **opposite** of the Phase 1 finding (50% optimal at 119.5M params), confirming that cooldown ratio must be tuned per token/param ratio.
-
-**Undertraining-aware hyperparameters used:**
+**Undertraining-aware hyperparameters:**
 
 | Setting | Phase 1 (119.5M) | Phase 2 (428M) | Why |
 |---------|-------------------|----------------|-----|
@@ -170,7 +209,7 @@ Tested dynamic layer reinit at 0%, 2%, 5%, and 10% dead-neuron thresholds. Zero 
 
 Karpathy's original Python engine (`karpathy/autoresearch`), run to 1000 steps with his original hyperparameters (MATRIX_LR=0.04, EMBEDDING_LR=0.6, 50% WSD cooldown, FINAL_LR_FRAC=0.0) and seed=42. Learning curve tracked every 50 steps in `results/karpathy_val_history.json`.
 
-**Result: 0.992095 bpb** (vs our Rust 0.8673 — a **0.125 bpb gap** at 1000 steps)
+**Result: 0.992095 bpb** (vs our Phase 1 Rust 0.8673 — a 0.125 bpb gap; vs Phase 2 0.5392 — a **0.453 bpb gap** at 1000 steps)
 
 ---
 
@@ -212,9 +251,11 @@ Embeddings use SGD (AdamW), not Muon. They receive sparse gradients — only tok
 
 The "× scale" refers to `(d_model / 768)^-0.5` applied to all AdamW groups, normalizing for d_model relative to the reference dimension.
 
-### WSD cooldown = 50%
+### WSD cooldown — regime-dependent
 
-Measured directly at depth=8:
+The optimal cooldown fraction depends on the token/param ratio:
+
+**Phase 1 (4.4 tokens/param, near Chinchilla-optimal):**
 
 | cooldown fraction | val_bpb |
 |------------------|---------|
@@ -222,9 +263,20 @@ Measured directly at depth=8:
 | **50% (350 steps)** | **0.9744** |
 | 75% (525 steps) | 0.9851 |
 
-50% wins by 0.008 bpb over 25% and 0.005 bpb over 75%. The stable phase needs enough steps for the model to find a good basin; the cooldown needs enough steps to converge into it. 50/50 is the right balance at 1000 total steps.
+50% wins. The model has enough data to fill the stable phase and enough headroom to benefit from a long, gradual cooldown.
 
-`FINAL_LR_FRAC=0.05`: measured as no difference vs 0.01, kept at 0.05 to avoid spending steps at near-zero LR where progress effectively halts.
+**Phase 2 (1.2 tokens/param, heavily undertrained):**
+
+| cooldown fraction | val_bpb |
+|------------------|---------|
+| 70% (700 steps) | 0.6111 |
+| **30% (300 steps)** | **0.5392** |
+
+30% wins by 0.072 bpb — a massive gap. When data is scarce, every step at full LR matters. The model hasn't finished learning by the time a 70% cooldown kicks in; it's decaying the LR while there's still signal to absorb. 10% and 20% ablations are running to find whether even shorter cooldown helps.
+
+This is the most actionable finding from Phase 2: **cooldown ratio is not a fixed hyperparameter — it must scale with the data/parameter budget.**
+
+`FINAL_LR_FRAC=0.05` (Phase 1) / `0.02` (Phase 2): kept small to avoid spending steps at near-zero LR where progress effectively halts.
 
 ### Init scale = 0.68
 
@@ -591,21 +643,19 @@ These changes are purely mechanical (no model changes, no hyperparameter impact)
 
 
 
-## Future Work
+## Future Work / In Progress
 
-### Full single-epoch run
+### Full single-epoch run (in progress)
 
-The climbmix-400b-shuffle dataset has 6,542 training shards (~4.2B tokens). At the Phase 2 model size (428M params), a full epoch would give ~9.8 tokens/param — still below Chinchilla-optimal (20:1) but dramatically better than the current 1.2:1 ratio. Expected significant val_bpb improvement.
+The 428M model is currently training for 8200 steps (~4.3B tokens, ~10 tokens/param) with 30% cooldown on a single H100 SXM. This is the same architecture and hyperparameters as the 0.5392 run, just with 8× more data. Expected to improve substantially — moving from 1.2 to 10 tokens/param is the single largest lever remaining.
 
-All infrastructure is in place:
+### Cooldown sweep (in progress)
 
-- **Feeder:** `feeder.py --stream` streams all shards from HuggingFace. Let it run to EOF.
-- **Cooldown trigger:** the engine supports trigger-file-based cooldown. Run with `MAX_STEPS` unset, write a trigger file when the feeder finishes.
-- **Schedule:** the 30% cooldown finding from Phase 2 should transfer — most of the budget at full LR, short cooldown at the end.
+10% and 20% cooldown ablations are running alongside the 30% baseline to determine whether even shorter cooldown helps in the undertrained regime. If the trend continues (70% → 30% was a 0.072 bpb win), 10% cooldown could push further.
 
 ### Further scaling
 
-The 428M model at 1.2 tokens/param already reaches 0.5392 bpb. With a full epoch (9.8 tokens/param), the same model should improve substantially. The pipeline supports arbitrary model sizes and context lengths — the binding constraint is VRAM (80GB per H100) and data volume.
+The pipeline supports arbitrary model sizes and context lengths — the binding constraint is VRAM (80GB per H100) and data volume. With a full epoch, the 428M model moves from severely undertrained to mildly undertrained. If val_bpb drops well below 0.5 at 10 tokens/param, scaling to 800M+ params on multi-GPU becomes the natural next step.
 
 ### Incorporating additional data
 

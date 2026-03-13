@@ -1,0 +1,476 @@
+Welcome to vast.ai. If authentication fails, try again after a few seconds, and double check your ssh key.
+Have fun!
+autoresearch-brain
+  max_steps:      1000
+  cooldown_steps: 700
+  batch:          4x4 = 524288 tokens/step
+  data:           /root/.cache/autoresearch/shards_packed
+  peak_lr:        0.02
+  warmdown_ratio: 0.75 (cooldown shape only)
+  weight_decay:   0.3
+  schedule:       linear
+  final_lr_frac:  0.02
+  (LRs scaled 0.5x: emb=0.4500 unemb=0.002500 scalar=0.2500)
+Allocated 48637.5 MB GPU memory (B=4)
+Model: 427.8M params, depth=30, d_model=1024
+Weights initialized (matching Python scheme)
+Batch: device=4, total=524288 (4 accum steps)
+Data: streaming from stdin (feeder, 16 batches prefetch)
+Allocated 1024.0 KB pinned host memory (2x B*T u32)
+Running warmup step...
+Warmup complete (13.56s). Estimated ~1000 training steps.
+step     0 | loss 9.0037 | lr 1.000 | dt 9.021s | tok/s 58116 | mfu 28.2% | vram 53410MB | steps_left 1000
+step     1 | loss 9.1882 | lr 1.000 | dt 9.854s | tok/s 53205 | mfu 25.8% | vram 53410MB | steps_left 999
+step     2 | loss 9.1203 | lr 1.000 | dt 9.900s | tok/s 52960 | mfu 25.7% | vram 53410MB | steps_left 998
+step     3 | loss 9.0132 | lr 1.000 | dt 9.895s | tok/s 52985 | mfu 25.7% | vram 53410MB | steps_left 997
+step     4 | loss 8.7128 | lr 1.000 | dt 9.928s | tok/s 52811 | mfu 25.6% | vram 53410MB | steps_left 996
+step     5 | loss 8.4967 | lr 1.000 | dt 9.857s | tok/s 53189 | mfu 25.8% | vram 53410MB | steps_left 995
+step     6 | loss 8.2883 | lr 1.000 | dt 9.877s | tok/s 53084 | mfu 25.8% | vram 53410MB | steps_left 994
+step     7 | loss 8.1141 | lr 1.000 | dt 9.889s | tok/s 53020 | mfu 25.7% | vram 53410MB | steps_left 993
+step     8 | loss 7.9448 | lr 1.000 | dt 9.910s | tok/s 52905 | mfu 25.7% | vram 53410MB | steps_left 992
+step     9 | loss 7.7734 | lr 1.000 | dt 9.921s | tok/s 52845 | mfu 25.7% | vram 53410MB | steps_left 991
+step    10 | loss 7.6002 | lr 1.000 | dt 9.940s | tok/s 52747 | mfu 25.6% | vram 53410MB | steps_left 990
+step    15 | loss 6.4810 | lr 1.000 | dt 9.945s | tok/s 52719 | mfu 25.6% | vram 53410MB | steps_left 985
+timing | fwd+bwd 9911.5ms  opt 33.5ms  gpu 9945.0ms  wall_gap 0.0ms
+step    20 | loss 5.9622 | lr 1.000 | dt 9.961s | tok/s 52632 | mfu 25.6% | vram 53410MB | steps_left 980
+timing | fwd+bwd 9928.4ms  opt 32.9ms  gpu 9961.3ms  wall_gap 0.0ms
+step    25 | loss 5.6946 | lr 1.000 | dt 9.963s | tok/s 52626 | mfu 25.6% | vram 53410MB | steps_left 975
+timing | fwd+bwd 9930.3ms  opt 32.2ms  gpu 9962.5ms  wall_gap 0.0ms
+[eval] step 25 | val_bpb 2.1255
+step    30 | loss 5.5497 | lr 1.000 | dt 9.917s | tok/s 52865 | mfu 25.7% | vram 53410MB | steps_left 970
+timing | fwd+bwd 9884.8ms  opt 32.7ms  gpu 9917.5ms  wall_gap 0.0ms
+step    35 | loss 5.4657 | lr 1.000 | dt 9.927s | tok/s 52817 | mfu 25.6% | vram 53410MB | steps_left 965
+timing | fwd+bwd 9893.9ms  opt 32.7ms  gpu 9926.6ms  wall_gap 0.0ms
+step    40 | loss 5.4155 | lr 1.000 | dt 9.927s | tok/s 52813 | mfu 25.6% | vram 53410MB | steps_left 960
+timing | fwd+bwd 9894.6ms  opt 32.6ms  gpu 9927.2ms  wall_gap 0.0ms
+step    45 | loss 5.3844 | lr 1.000 | dt 9.921s | tok/s 52845 | mfu 25.7% | vram 53410MB | steps_left 955
+timing | fwd+bwd 9888.2ms  opt 32.9ms  gpu 9921.2ms  wall_gap 0.0ms
+step    50 | loss 5.3673 | lr 1.000 | dt 9.978s | tok/s 52547 | mfu 25.5% | vram 53410MB | steps_left 950
+timing | fwd+bwd 9944.2ms  opt 33.3ms  gpu 9977.5ms  wall_gap 0.0ms
+[eval] step 50 | val_bpb 1.7663
+step    55 | loss 5.3523 | lr 1.000 | dt 9.916s | tok/s 52872 | mfu 25.7% | vram 53410MB | steps_left 945
+timing | fwd+bwd 9883.5ms  opt 32.6ms  gpu 9916.1ms  wall_gap 0.0ms
+step    60 | loss 5.3348 | lr 1.000 | dt 9.920s | tok/s 52851 | mfu 25.7% | vram 53410MB | steps_left 940
+timing | fwd+bwd 9887.6ms  opt 32.6ms  gpu 9920.2ms  wall_gap 0.0ms
+step    65 | loss 5.3190 | lr 1.000 | dt 9.959s | tok/s 52647 | mfu 25.6% | vram 53410MB | steps_left 935
+timing | fwd+bwd 9925.3ms  opt 33.3ms  gpu 9958.6ms  wall_gap 0.0ms
+step    70 | loss 5.2963 | lr 1.000 | dt 9.924s | tok/s 52830 | mfu 25.7% | vram 53410MB | steps_left 930
+timing | fwd+bwd 9890.0ms  opt 34.1ms  gpu 9924.1ms  wall_gap 0.0ms
+step    75 | loss 5.2723 | lr 1.000 | dt 9.920s | tok/s 52854 | mfu 25.7% | vram 53410MB | steps_left 925
+timing | fwd+bwd 9886.8ms  opt 32.7ms  gpu 9919.5ms  wall_gap 0.0ms
+[eval] step 75 | val_bpb 1.8835
+step    80 | loss 5.2464 | lr 1.000 | dt 9.921s | tok/s 52847 | mfu 25.7% | vram 53410MB | steps_left 920
+timing | fwd+bwd 9888.2ms  opt 32.6ms  gpu 9920.9ms  wall_gap 0.0ms
+step    85 | loss 5.2176 | lr 1.000 | dt 9.903s | tok/s 52941 | mfu 25.7% | vram 53410MB | steps_left 915
+timing | fwd+bwd 9870.5ms  opt 32.7ms  gpu 9903.3ms  wall_gap 0.0ms
+step    90 | loss 5.1823 | lr 1.000 | dt 9.907s | tok/s 52923 | mfu 25.7% | vram 53410MB | steps_left 910
+timing | fwd+bwd 9873.5ms  opt 33.2ms  gpu 9906.7ms  wall_gap 0.0ms
+step    95 | loss 5.1443 | lr 1.000 | dt 9.910s | tok/s 52904 | mfu 25.7% | vram 53410MB | steps_left 905
+timing | fwd+bwd 9877.0ms  opt 33.1ms  gpu 9910.1ms  wall_gap 0.0ms
+step   100 | loss 5.1021 | lr 1.000 | dt 9.893s | tok/s 52994 | mfu 25.7% | vram 53410MB | steps_left 900
+timing | fwd+bwd 9860.8ms  opt 32.5ms  gpu 9893.3ms  wall_gap 0.0ms
+[eval] step 100 | val_bpb 1.7624
+step   105 | loss 5.0576 | lr 1.000 | dt 9.900s | tok/s 52961 | mfu 25.7% | vram 53410MB | steps_left 895
+timing | fwd+bwd 9866.3ms  opt 33.3ms  gpu 9899.6ms  wall_gap 0.0ms
+step   110 | loss 5.0067 | lr 1.000 | dt 9.901s | tok/s 52954 | mfu 25.7% | vram 53410MB | steps_left 890
+timing | fwd+bwd 9868.1ms  opt 32.8ms  gpu 9900.9ms  wall_gap 0.0ms
+step   115 | loss 4.9457 | lr 1.000 | dt 9.901s | tok/s 52954 | mfu 25.7% | vram 53410MB | steps_left 885
+timing | fwd+bwd 9868.0ms  opt 32.9ms  gpu 9900.9ms  wall_gap 0.0ms
+step   120 | loss 4.8867 | lr 1.000 | dt 9.888s | tok/s 53022 | mfu 25.7% | vram 53410MB | steps_left 880
+timing | fwd+bwd 9855.1ms  opt 33.0ms  gpu 9888.1ms  wall_gap 0.0ms
+step   125 | loss 4.8207 | lr 1.000 | dt 9.895s | tok/s 52984 | mfu 25.7% | vram 53410MB | steps_left 875
+timing | fwd+bwd 9863.0ms  opt 32.3ms  gpu 9895.3ms  wall_gap 0.0ms
+[eval] step 125 | val_bpb 1.6083
+step   130 | loss 4.7505 | lr 1.000 | dt 9.879s | tok/s 53071 | mfu 25.8% | vram 53410MB | steps_left 870
+timing | fwd+bwd 9846.7ms  opt 32.3ms  gpu 9879.1ms  wall_gap 0.0ms
+step   135 | loss 4.6787 | lr 1.000 | dt 9.890s | tok/s 53011 | mfu 25.7% | vram 53410MB | steps_left 865
+timing | fwd+bwd 9857.0ms  opt 33.2ms  gpu 9890.2ms  wall_gap 0.0ms
+step   140 | loss 4.6095 | lr 1.000 | dt 9.889s | tok/s 53018 | mfu 25.7% | vram 53410MB | steps_left 860
+timing | fwd+bwd 9856.0ms  opt 32.9ms  gpu 9888.9ms  wall_gap 0.0ms
+step   145 | loss 4.5416 | lr 1.000 | dt 9.882s | tok/s 53057 | mfu 25.8% | vram 53410MB | steps_left 855
+timing | fwd+bwd 9848.9ms  opt 32.6ms  gpu 9881.5ms  wall_gap 0.0ms
+step   150 | loss 4.4721 | lr 1.000 | dt 9.879s | tok/s 53070 | mfu 25.8% | vram 53410MB | steps_left 850
+timing | fwd+bwd 9846.5ms  opt 32.6ms  gpu 9879.2ms  wall_gap 0.0ms
+[eval] step 150 | val_bpb 1.3567
+step   155 | loss 4.4034 | lr 1.000 | dt 9.883s | tok/s 53051 | mfu 25.8% | vram 53410MB | steps_left 845
+timing | fwd+bwd 9849.8ms  opt 32.8ms  gpu 9882.6ms  wall_gap 0.0ms
+step   160 | loss 4.3313 | lr 1.000 | dt 9.881s | tok/s 53059 | mfu 25.8% | vram 53410MB | steps_left 840
+timing | fwd+bwd 9848.6ms  opt 32.6ms  gpu 9881.2ms  wall_gap 0.0ms
+step   165 | loss 4.2629 | lr 1.000 | dt 9.879s | tok/s 53071 | mfu 25.8% | vram 53410MB | steps_left 835
+timing | fwd+bwd 9846.2ms  opt 32.8ms  gpu 9879.0ms  wall_gap 0.0ms
+step   170 | loss 4.1942 | lr 1.000 | dt 9.881s | tok/s 53058 | mfu 25.8% | vram 53410MB | steps_left 830
+timing | fwd+bwd 9848.5ms  opt 33.0ms  gpu 9881.5ms  wall_gap 0.0ms
+step   175 | loss 4.1281 | lr 1.000 | dt 9.878s | tok/s 53074 | mfu 25.8% | vram 53410MB | steps_left 825
+timing | fwd+bwd 9845.8ms  opt 32.7ms  gpu 9878.5ms  wall_gap 0.0ms
+[eval] step 175 | val_bpb 1.2264
+step   180 | loss 4.0732 | lr 1.000 | dt 9.877s | tok/s 53083 | mfu 25.8% | vram 53410MB | steps_left 820
+timing | fwd+bwd 9843.9ms  opt 32.8ms  gpu 9876.7ms  wall_gap 0.0ms
+step   185 | loss 4.0176 | lr 1.000 | dt 9.863s | tok/s 53154 | mfu 25.8% | vram 53410MB | steps_left 815
+timing | fwd+bwd 9830.8ms  opt 32.7ms  gpu 9863.5ms  wall_gap 0.0ms
+step   190 | loss 3.9590 | lr 1.000 | dt 9.862s | tok/s 53162 | mfu 25.8% | vram 53410MB | steps_left 810
+timing | fwd+bwd 9829.4ms  opt 32.6ms  gpu 9862.0ms  wall_gap 0.0ms
+step   195 | loss 3.9060 | lr 1.000 | dt 9.865s | tok/s 53149 | mfu 25.8% | vram 53410MB | steps_left 805
+timing | fwd+bwd 9832.0ms  opt 32.6ms  gpu 9864.6ms  wall_gap 0.0ms
+step   200 | loss 3.8495 | lr 1.000 | dt 9.875s | tok/s 53091 | mfu 25.8% | vram 53410MB | steps_left 800
+timing | fwd+bwd 9842.3ms  opt 33.0ms  gpu 9875.2ms  wall_gap 0.0ms
+[eval] step 200 | val_bpb 1.1660
+step   205 | loss 3.7989 | lr 1.000 | dt 9.880s | tok/s 53064 | mfu 25.8% | vram 53410MB | steps_left 795
+timing | fwd+bwd 9847.4ms  opt 32.9ms  gpu 9880.3ms  wall_gap 0.0ms
+step   210 | loss 3.7535 | lr 1.000 | dt 9.862s | tok/s 53164 | mfu 25.8% | vram 53410MB | steps_left 790
+timing | fwd+bwd 9829.3ms  opt 32.4ms  gpu 9861.7ms  wall_gap 0.0ms
+step   215 | loss 3.7143 | lr 1.000 | dt 9.860s | tok/s 53174 | mfu 25.8% | vram 53410MB | steps_left 785
+timing | fwd+bwd 9827.4ms  opt 32.5ms  gpu 9859.9ms  wall_gap 0.0ms
+step   220 | loss 3.6709 | lr 1.000 | dt 9.862s | tok/s 53162 | mfu 25.8% | vram 53410MB | steps_left 780
+timing | fwd+bwd 9829.6ms  opt 32.5ms  gpu 9862.0ms  wall_gap 0.0ms
+step   225 | loss 3.6354 | lr 1.000 | dt 9.863s | tok/s 53159 | mfu 25.8% | vram 53410MB | steps_left 775
+timing | fwd+bwd 9830.2ms  opt 32.5ms  gpu 9862.7ms  wall_gap 0.0ms
+[eval] step 225 | val_bpb 1.0804
+step   230 | loss 3.5993 | lr 1.000 | dt 9.859s | tok/s 53181 | mfu 25.8% | vram 53410MB | steps_left 770
+timing | fwd+bwd 9825.1ms  opt 33.4ms  gpu 9858.5ms  wall_gap 0.0ms
+step   235 | loss 3.5623 | lr 1.000 | dt 9.859s | tok/s 53179 | mfu 25.8% | vram 53410MB | steps_left 765
+timing | fwd+bwd 9825.6ms  opt 33.3ms  gpu 9858.9ms  wall_gap 0.0ms
+step   240 | loss 3.5311 | lr 1.000 | dt 9.850s | tok/s 53228 | mfu 25.8% | vram 53410MB | steps_left 760
+timing | fwd+bwd 9816.4ms  opt 33.5ms  gpu 9849.9ms  wall_gap 0.0ms
+step   245 | loss 3.5024 | lr 1.000 | dt 9.858s | tok/s 53185 | mfu 25.8% | vram 53410MB | steps_left 755
+timing | fwd+bwd 9824.5ms  opt 33.4ms  gpu 9857.9ms  wall_gap 0.0ms
+step   250 | loss 3.4711 | lr 1.000 | dt 9.862s | tok/s 53162 | mfu 25.8% | vram 53410MB | steps_left 750
+timing | fwd+bwd 9829.2ms  opt 32.8ms  gpu 9862.0ms  wall_gap 0.0ms
+[eval] step 250 | val_bpb 1.0217
+step   255 | loss 3.4421 | lr 1.000 | dt 9.862s | tok/s 53162 | mfu 25.8% | vram 53410MB | steps_left 745
+timing | fwd+bwd 9829.1ms  opt 33.0ms  gpu 9862.1ms  wall_gap 0.0ms
+step   260 | loss 3.4159 | lr 1.000 | dt 9.857s | tok/s 53190 | mfu 25.8% | vram 53410MB | steps_left 740
+timing | fwd+bwd 9824.0ms  opt 32.8ms  gpu 9856.8ms  wall_gap 0.0ms
+step   265 | loss 3.3852 | lr 1.000 | dt 9.859s | tok/s 53181 | mfu 25.8% | vram 53410MB | steps_left 735
+timing | fwd+bwd 9826.1ms  opt 32.4ms  gpu 9858.5ms  wall_gap 0.0ms
+step   270 | loss 3.3662 | lr 1.000 | dt 9.851s | tok/s 53224 | mfu 25.8% | vram 53410MB | steps_left 730
+timing | fwd+bwd 9816.9ms  opt 33.6ms  gpu 9850.5ms  wall_gap 0.0ms
+step   275 | loss 3.3491 | lr 1.000 | dt 9.861s | tok/s 53167 | mfu 25.8% | vram 53410MB | steps_left 725
+timing | fwd+bwd 9828.2ms  opt 32.9ms  gpu 9861.1ms  wall_gap 0.0ms
+[eval] step 275 | val_bpb 1.0406
+step   280 | loss 3.3296 | lr 1.000 | dt 9.853s | tok/s 53211 | mfu 25.8% | vram 53410MB | steps_left 720
+timing | fwd+bwd 9820.6ms  opt 32.4ms  gpu 9853.0ms  wall_gap 0.0ms
+step   285 | loss 3.3101 | lr 1.000 | dt 9.854s | tok/s 53203 | mfu 25.8% | vram 53410MB | steps_left 715
+timing | fwd+bwd 9821.5ms  opt 33.0ms  gpu 9854.5ms  wall_gap 0.0ms
+step   290 | loss 3.2910 | lr 1.000 | dt 9.855s | tok/s 53203 | mfu 25.8% | vram 53410MB | steps_left 710
+timing | fwd+bwd 9821.7ms  opt 32.8ms  gpu 9854.5ms  wall_gap 0.0ms
+step   295 | loss 3.2759 | lr 1.000 | dt 9.863s | tok/s 53158 | mfu 25.8% | vram 53410MB | steps_left 705
+timing | fwd+bwd 9830.0ms  opt 32.8ms  gpu 9862.9ms  wall_gap 0.0ms
+step   300 | loss 3.2650 | lr 1.000 | dt 9.842s | tok/s 53271 | mfu 25.9% | vram 53410MB | steps_left 700
+timing | fwd+bwd 9809.4ms  opt 32.6ms  gpu 9841.9ms  wall_gap 0.0ms
+[eval] step 300 | val_bpb 0.9052
+step   305 | loss 3.2501 | lr 0.993 | dt 9.857s | tok/s 53187 | mfu 25.8% | vram 53410MB | steps_left 695
+timing | fwd+bwd 9825.1ms  opt 32.3ms  gpu 9857.4ms  wall_gap 0.0ms
+step   310 | loss 3.2351 | lr 0.986 | dt 9.851s | tok/s 53221 | mfu 25.8% | vram 53410MB | steps_left 690
+timing | fwd+bwd 9818.6ms  opt 32.6ms  gpu 9851.2ms  wall_gap 0.0ms
+step   315 | loss 3.2210 | lr 0.979 | dt 9.847s | tok/s 53244 | mfu 25.9% | vram 53410MB | steps_left 685
+timing | fwd+bwd 9814.1ms  opt 32.7ms  gpu 9846.8ms  wall_gap 0.0ms
+step   320 | loss 3.2086 | lr 0.972 | dt 9.849s | tok/s 53232 | mfu 25.8% | vram 53410MB | steps_left 680
+timing | fwd+bwd 9816.3ms  opt 32.8ms  gpu 9849.2ms  wall_gap 0.0ms
+step   325 | loss 3.1972 | lr 0.965 | dt 9.849s | tok/s 53231 | mfu 25.8% | vram 53410MB | steps_left 675
+timing | fwd+bwd 9816.6ms  opt 32.6ms  gpu 9849.3ms  wall_gap 0.0ms
+[eval] step 325 | val_bpb 0.9711
+step   330 | loss 3.1821 | lr 0.958 | dt 9.846s | tok/s 53248 | mfu 25.9% | vram 53410MB | steps_left 670
+timing | fwd+bwd 9813.4ms  opt 32.7ms  gpu 9846.1ms  wall_gap 0.0ms
+step   335 | loss 3.1620 | lr 0.951 | dt 9.851s | tok/s 53223 | mfu 25.8% | vram 53410MB | steps_left 665
+timing | fwd+bwd 9818.1ms  opt 32.8ms  gpu 9850.8ms  wall_gap 0.0ms
+step   340 | loss 3.1484 | lr 0.944 | dt 9.852s | tok/s 53219 | mfu 25.8% | vram 53410MB | steps_left 660
+timing | fwd+bwd 9818.4ms  opt 33.2ms  gpu 9851.6ms  wall_gap 0.0ms
+step   345 | loss 3.1421 | lr 0.937 | dt 9.850s | tok/s 53229 | mfu 25.8% | vram 53410MB | steps_left 655
+timing | fwd+bwd 9817.2ms  opt 32.6ms  gpu 9849.7ms  wall_gap 0.0ms
+step   350 | loss 3.1316 | lr 0.930 | dt 9.835s | tok/s 53307 | mfu 25.9% | vram 53410MB | steps_left 650
+timing | fwd+bwd 9802.5ms  opt 32.8ms  gpu 9835.3ms  wall_gap 0.0ms
+[eval] step 350 | val_bpb 0.9053
+step   355 | loss 3.1143 | lr 0.923 | dt 9.846s | tok/s 53251 | mfu 25.9% | vram 53410MB | steps_left 645
+timing | fwd+bwd 9812.9ms  opt 32.7ms  gpu 9845.7ms  wall_gap 0.0ms
+step   360 | loss 3.1031 | lr 0.916 | dt 9.846s | tok/s 53251 | mfu 25.9% | vram 53410MB | steps_left 640
+timing | fwd+bwd 9812.9ms  opt 32.6ms  gpu 9845.5ms  wall_gap 0.0ms
+step   365 | loss 3.0944 | lr 0.909 | dt 9.844s | tok/s 53259 | mfu 25.9% | vram 53410MB | steps_left 635
+timing | fwd+bwd 9811.3ms  opt 32.8ms  gpu 9844.1ms  wall_gap 0.0ms
+step   370 | loss 3.0846 | lr 0.902 | dt 9.845s | tok/s 53253 | mfu 25.9% | vram 53410MB | steps_left 630
+timing | fwd+bwd 9812.7ms  opt 32.6ms  gpu 9845.3ms  wall_gap 0.0ms
+step   375 | loss 3.0707 | lr 0.895 | dt 9.839s | tok/s 53289 | mfu 25.9% | vram 53410MB | steps_left 625
+timing | fwd+bwd 9806.0ms  opt 32.7ms  gpu 9838.6ms  wall_gap 0.0ms
+[eval] step 375 | val_bpb 0.7777
+step   380 | loss 3.0601 | lr 0.888 | dt 9.858s | tok/s 53182 | mfu 25.8% | vram 53410MB | steps_left 620
+timing | fwd+bwd 9825.6ms  opt 32.8ms  gpu 9858.3ms  wall_gap 0.0ms
+step   385 | loss 3.0512 | lr 0.881 | dt 9.859s | tok/s 53181 | mfu 25.8% | vram 53410MB | steps_left 615
+timing | fwd+bwd 9825.9ms  opt 32.6ms  gpu 9858.5ms  wall_gap 0.0ms
+step   390 | loss 3.0450 | lr 0.874 | dt 9.855s | tok/s 53198 | mfu 25.8% | vram 53410MB | steps_left 610
+timing | fwd+bwd 9822.1ms  opt 33.2ms  gpu 9855.3ms  wall_gap 0.0ms
+step   395 | loss 3.0313 | lr 0.867 | dt 9.844s | tok/s 53261 | mfu 25.9% | vram 53410MB | steps_left 605
+timing | fwd+bwd 9810.8ms  opt 33.0ms  gpu 9843.7ms  wall_gap 0.0ms
+step   400 | loss 3.0271 | lr 0.860 | dt 9.842s | tok/s 53270 | mfu 25.9% | vram 53410MB | steps_left 600
+timing | fwd+bwd 9809.4ms  opt 32.6ms  gpu 9842.0ms  wall_gap 0.0ms
+[eval] step 400 | val_bpb 0.7299
+step   405 | loss 3.0218 | lr 0.853 | dt 9.848s | tok/s 53238 | mfu 25.8% | vram 53410MB | steps_left 595
+timing | fwd+bwd 9815.2ms  opt 32.8ms  gpu 9848.0ms  wall_gap 0.0ms
+step   410 | loss 3.0181 | lr 0.846 | dt 9.842s | tok/s 53272 | mfu 25.9% | vram 53410MB | steps_left 590
+timing | fwd+bwd 9809.1ms  opt 32.6ms  gpu 9841.7ms  wall_gap 0.0ms
+step   415 | loss 3.0091 | lr 0.839 | dt 9.848s | tok/s 53235 | mfu 25.8% | vram 53410MB | steps_left 585
+timing | fwd+bwd 9815.4ms  opt 33.1ms  gpu 9848.5ms  wall_gap 0.0ms
+step   420 | loss 3.0018 | lr 0.832 | dt 9.847s | tok/s 53243 | mfu 25.9% | vram 53410MB | steps_left 580
+timing | fwd+bwd 9814.2ms  opt 32.9ms  gpu 9847.1ms  wall_gap 0.0ms
+step   425 | loss 2.9934 | lr 0.825 | dt 9.845s | tok/s 53257 | mfu 25.9% | vram 53410MB | steps_left 575
+timing | fwd+bwd 9811.1ms  opt 33.4ms  gpu 9844.5ms  wall_gap 0.0ms
+[eval] step 425 | val_bpb 0.7354
+step   430 | loss 2.9892 | lr 0.818 | dt 9.846s | tok/s 53246 | mfu 25.9% | vram 53410MB | steps_left 570
+timing | fwd+bwd 9813.9ms  opt 32.6ms  gpu 9846.5ms  wall_gap 0.0ms
+step   435 | loss 2.9839 | lr 0.811 | dt 9.837s | tok/s 53297 | mfu 25.9% | vram 53410MB | steps_left 565
+timing | fwd+bwd 9804.4ms  opt 32.7ms  gpu 9837.1ms  wall_gap 0.0ms
+step   440 | loss 2.9732 | lr 0.804 | dt 9.841s | tok/s 53276 | mfu 25.9% | vram 53410MB | steps_left 560
+timing | fwd+bwd 9808.5ms  opt 32.5ms  gpu 9841.0ms  wall_gap 0.0ms
+step   445 | loss 2.9656 | lr 0.797 | dt 9.837s | tok/s 53299 | mfu 25.9% | vram 53410MB | steps_left 555
+timing | fwd+bwd 9804.2ms  opt 32.5ms  gpu 9836.7ms  wall_gap 0.0ms
+step   450 | loss 2.9538 | lr 0.790 | dt 9.840s | tok/s 53281 | mfu 25.9% | vram 53410MB | steps_left 550
+timing | fwd+bwd 9807.4ms  opt 32.6ms  gpu 9840.0ms  wall_gap 0.0ms
+[eval] step 450 | val_bpb 0.6981
+step   455 | loss 2.9452 | lr 0.783 | dt 9.842s | tok/s 53269 | mfu 25.9% | vram 53410MB | steps_left 545
+timing | fwd+bwd 9809.6ms  opt 32.6ms  gpu 9842.2ms  wall_gap 0.0ms
+step   460 | loss 2.9416 | lr 0.776 | dt 9.851s | tok/s 53224 | mfu 25.8% | vram 53410MB | steps_left 540
+timing | fwd+bwd 9817.4ms  opt 33.2ms  gpu 9850.5ms  wall_gap 0.0ms
+step   465 | loss 2.9379 | lr 0.769 | dt 9.838s | tok/s 53293 | mfu 25.9% | vram 53410MB | steps_left 535
+timing | fwd+bwd 9805.4ms  opt 32.5ms  gpu 9837.9ms  wall_gap 0.0ms
+step   470 | loss 2.9313 | lr 0.762 | dt 9.843s | tok/s 53266 | mfu 25.9% | vram 53410MB | steps_left 530
+timing | fwd+bwd 9810.7ms  opt 32.1ms  gpu 9842.9ms  wall_gap 0.0ms
+step   475 | loss 2.9226 | lr 0.755 | dt 9.840s | tok/s 53284 | mfu 25.9% | vram 53410MB | steps_left 525
+timing | fwd+bwd 9806.6ms  opt 32.9ms  gpu 9839.5ms  wall_gap 0.0ms
+[eval] step 475 | val_bpb 0.6674
+step   480 | loss 2.9152 | lr 0.748 | dt 9.838s | tok/s 53292 | mfu 25.9% | vram 53410MB | steps_left 520
+timing | fwd+bwd 9805.7ms  opt 32.3ms  gpu 9838.0ms  wall_gap 0.0ms
+step   485 | loss 2.9105 | lr 0.741 | dt 9.836s | tok/s 53302 | mfu 25.9% | vram 53410MB | steps_left 515
+timing | fwd+bwd 9803.3ms  opt 32.8ms  gpu 9836.2ms  wall_gap 0.0ms
+step   490 | loss 2.9023 | lr 0.734 | dt 9.846s | tok/s 53250 | mfu 25.9% | vram 53410MB | steps_left 510
+timing | fwd+bwd 9812.8ms  opt 33.0ms  gpu 9845.9ms  wall_gap 0.0ms
+step   495 | loss 2.8936 | lr 0.727 | dt 9.840s | tok/s 53282 | mfu 25.9% | vram 53410MB | steps_left 505
+timing | fwd+bwd 9807.2ms  opt 32.8ms  gpu 9839.9ms  wall_gap 0.0ms
+step   500 | loss 2.8926 | lr 0.720 | dt 9.840s | tok/s 53281 | mfu 25.9% | vram 53410MB | steps_left 500
+timing | fwd+bwd 9806.4ms  opt 33.6ms  gpu 9840.0ms  wall_gap 0.0ms
+[eval] step 500 | val_bpb 0.6723
+step   505 | loss 2.8921 | lr 0.713 | dt 9.841s | tok/s 53277 | mfu 25.9% | vram 53410MB | steps_left 495
+timing | fwd+bwd 9807.3ms  opt 33.4ms  gpu 9840.7ms  wall_gap 0.0ms
+step   510 | loss 2.8858 | lr 0.706 | dt 9.833s | tok/s 53318 | mfu 25.9% | vram 53410MB | steps_left 490
+timing | fwd+bwd 9800.5ms  opt 32.7ms  gpu 9833.3ms  wall_gap 0.0ms
+step   515 | loss 2.8805 | lr 0.699 | dt 9.839s | tok/s 53284 | mfu 25.9% | vram 53410MB | steps_left 485
+timing | fwd+bwd 9806.6ms  opt 32.9ms  gpu 9839.5ms  wall_gap 0.0ms
+step   520 | loss 2.8821 | lr 0.692 | dt 9.840s | tok/s 53282 | mfu 25.9% | vram 53410MB | steps_left 480
+timing | fwd+bwd 9807.3ms  opt 32.6ms  gpu 9839.9ms  wall_gap 0.0ms
+step   525 | loss 2.8728 | lr 0.685 | dt 9.834s | tok/s 53313 | mfu 25.9% | vram 53410MB | steps_left 475
+timing | fwd+bwd 9801.3ms  opt 32.9ms  gpu 9834.1ms  wall_gap 0.0ms
+[eval] step 525 | val_bpb 0.6876
+step   530 | loss 2.8685 | lr 0.678 | dt 9.828s | tok/s 53349 | mfu 25.9% | vram 53410MB | steps_left 470
+timing | fwd+bwd 9794.0ms  opt 33.6ms  gpu 9827.6ms  wall_gap 0.0ms
+step   535 | loss 2.8671 | lr 0.671 | dt 9.847s | tok/s 53246 | mfu 25.9% | vram 53410MB | steps_left 465
+timing | fwd+bwd 9813.9ms  opt 32.7ms  gpu 9846.6ms  wall_gap 0.0ms
+step   540 | loss 2.8617 | lr 0.664 | dt 9.842s | tok/s 53269 | mfu 25.9% | vram 53410MB | steps_left 460
+timing | fwd+bwd 9809.8ms  opt 32.6ms  gpu 9842.3ms  wall_gap 0.0ms
+step   545 | loss 2.8590 | lr 0.657 | dt 9.831s | tok/s 53333 | mfu 25.9% | vram 53410MB | steps_left 455
+timing | fwd+bwd 9797.2ms  opt 33.4ms  gpu 9830.5ms  wall_gap 0.0ms
+step   550 | loss 2.8558 | lr 0.650 | dt 9.843s | tok/s 53264 | mfu 25.9% | vram 53410MB | steps_left 450
+timing | fwd+bwd 9810.6ms  opt 32.6ms  gpu 9843.2ms  wall_gap 0.0ms
+[eval] step 550 | val_bpb 0.6567
+step   555 | loss 2.8454 | lr 0.643 | dt 9.830s | tok/s 53335 | mfu 25.9% | vram 53410MB | steps_left 445
+timing | fwd+bwd 9797.2ms  opt 32.8ms  gpu 9830.0ms  wall_gap 0.0ms
+step   560 | loss 2.8398 | lr 0.636 | dt 9.844s | tok/s 53260 | mfu 25.9% | vram 53410MB | steps_left 440
+timing | fwd+bwd 9811.2ms  opt 32.7ms  gpu 9843.8ms  wall_gap 0.0ms
+step   565 | loss 2.8356 | lr 0.629 | dt 9.835s | tok/s 53306 | mfu 25.9% | vram 53410MB | steps_left 435
+timing | fwd+bwd 9802.7ms  opt 32.7ms  gpu 9835.4ms  wall_gap 0.0ms
+step   570 | loss 2.8297 | lr 0.622 | dt 9.836s | tok/s 53304 | mfu 25.9% | vram 53410MB | steps_left 430
+timing | fwd+bwd 9802.8ms  opt 32.9ms  gpu 9835.7ms  wall_gap 0.0ms
+step   575 | loss 2.8214 | lr 0.615 | dt 9.840s | tok/s 53282 | mfu 25.9% | vram 53410MB | steps_left 425
+timing | fwd+bwd 9807.2ms  opt 32.6ms  gpu 9839.9ms  wall_gap 0.0ms
+[eval] step 575 | val_bpb 0.8183
+step   580 | loss 2.8178 | lr 0.608 | dt 9.837s | tok/s 53298 | mfu 25.9% | vram 53410MB | steps_left 420
+timing | fwd+bwd 9803.9ms  opt 32.9ms  gpu 9836.8ms  wall_gap 0.0ms
+step   585 | loss 2.8151 | lr 0.601 | dt 9.842s | tok/s 53272 | mfu 25.9% | vram 53410MB | steps_left 415
+timing | fwd+bwd 9808.6ms  opt 33.1ms  gpu 9841.7ms  wall_gap 0.0ms
+step   590 | loss 2.8031 | lr 0.594 | dt 9.835s | tok/s 53307 | mfu 25.9% | vram 53410MB | steps_left 410
+timing | fwd+bwd 9802.1ms  opt 33.2ms  gpu 9835.3ms  wall_gap 0.0ms
+step   595 | loss 2.8014 | lr 0.587 | dt 9.844s | tok/s 53259 | mfu 25.9% | vram 53410MB | steps_left 405
+timing | fwd+bwd 9811.4ms  opt 32.7ms  gpu 9844.2ms  wall_gap 0.0ms
+step   600 | loss 2.7979 | lr 0.580 | dt 9.841s | tok/s 53275 | mfu 25.9% | vram 53410MB | steps_left 400
+timing | fwd+bwd 9808.4ms  opt 32.9ms  gpu 9841.2ms  wall_gap 0.0ms
+[eval] step 600 | val_bpb 0.6843
+step   605 | loss 2.7964 | lr 0.573 | dt 9.834s | tok/s 53316 | mfu 25.9% | vram 53410MB | steps_left 395
+timing | fwd+bwd 9801.0ms  opt 32.6ms  gpu 9833.6ms  wall_gap 0.0ms
+step   610 | loss 2.7921 | lr 0.566 | dt 9.841s | tok/s 53273 | mfu 25.9% | vram 53410MB | steps_left 390
+timing | fwd+bwd 9808.6ms  opt 32.8ms  gpu 9841.5ms  wall_gap 0.0ms
+step   615 | loss 2.7918 | lr 0.559 | dt 9.843s | tok/s 53266 | mfu 25.9% | vram 53410MB | steps_left 385
+timing | fwd+bwd 9810.3ms  opt 32.4ms  gpu 9842.7ms  wall_gap 0.0ms
+step   620 | loss 2.7816 | lr 0.552 | dt 9.831s | tok/s 53331 | mfu 25.9% | vram 53410MB | steps_left 380
+timing | fwd+bwd 9798.3ms  opt 32.6ms  gpu 9830.9ms  wall_gap 0.0ms
+step   625 | loss 2.7797 | lr 0.545 | dt 9.837s | tok/s 53295 | mfu 25.9% | vram 53410MB | steps_left 375
+timing | fwd+bwd 9804.6ms  opt 32.9ms  gpu 9837.5ms  wall_gap 0.0ms
+[eval] step 625 | val_bpb 0.6870
+step   630 | loss 2.7772 | lr 0.538 | dt 9.827s | tok/s 53354 | mfu 25.9% | vram 53410MB | steps_left 370
+timing | fwd+bwd 9793.8ms  opt 32.8ms  gpu 9826.6ms  wall_gap 0.0ms
+step   635 | loss 2.7794 | lr 0.531 | dt 9.836s | tok/s 53301 | mfu 25.9% | vram 53410MB | steps_left 365
+timing | fwd+bwd 9803.3ms  opt 33.0ms  gpu 9836.3ms  wall_gap 0.0ms
+step   640 | loss 2.7794 | lr 0.524 | dt 9.832s | tok/s 53326 | mfu 25.9% | vram 53410MB | steps_left 360
+timing | fwd+bwd 9798.9ms  opt 32.8ms  gpu 9831.7ms  wall_gap 0.0ms
+step   645 | loss 2.7762 | lr 0.517 | dt 9.831s | tok/s 53331 | mfu 25.9% | vram 53410MB | steps_left 355
+timing | fwd+bwd 9797.9ms  opt 32.9ms  gpu 9830.8ms  wall_gap 0.0ms
+step   650 | loss 2.7724 | lr 0.510 | dt 9.828s | tok/s 53349 | mfu 25.9% | vram 53410MB | steps_left 350
+timing | fwd+bwd 9794.8ms  opt 32.7ms  gpu 9827.5ms  wall_gap 0.0ms
+[eval] step 650 | val_bpb 0.6823
+step   655 | loss 2.7657 | lr 0.503 | dt 9.838s | tok/s 53293 | mfu 25.9% | vram 53410MB | steps_left 345
+timing | fwd+bwd 9805.0ms  opt 32.8ms  gpu 9837.8ms  wall_gap 0.0ms
+step   660 | loss 2.7667 | lr 0.496 | dt 9.839s | tok/s 53287 | mfu 25.9% | vram 53410MB | steps_left 340
+timing | fwd+bwd 9805.6ms  opt 33.3ms  gpu 9838.9ms  wall_gap 0.0ms
+step   665 | loss 2.7668 | lr 0.489 | dt 9.824s | tok/s 53366 | mfu 25.9% | vram 53410MB | steps_left 335
+timing | fwd+bwd 9791.9ms  opt 32.4ms  gpu 9824.3ms  wall_gap 0.0ms
+step   670 | loss 2.7591 | lr 0.482 | dt 9.834s | tok/s 53313 | mfu 25.9% | vram 53410MB | steps_left 330
+timing | fwd+bwd 9801.4ms  opt 32.7ms  gpu 9834.1ms  wall_gap 0.0ms
+step   675 | loss 2.7530 | lr 0.475 | dt 9.835s | tok/s 53306 | mfu 25.9% | vram 53410MB | steps_left 325
+timing | fwd+bwd 9802.6ms  opt 32.7ms  gpu 9835.4ms  wall_gap 0.0ms
+[eval] step 675 | val_bpb 0.6497
+step   680 | loss 2.7471 | lr 0.468 | dt 9.831s | tok/s 53328 | mfu 25.9% | vram 53410MB | steps_left 320
+timing | fwd+bwd 9798.6ms  opt 32.8ms  gpu 9831.4ms  wall_gap 0.0ms
+step   685 | loss 2.7441 | lr 0.461 | dt 9.828s | tok/s 53344 | mfu 25.9% | vram 53410MB | steps_left 315
+timing | fwd+bwd 9795.5ms  opt 32.9ms  gpu 9828.4ms  wall_gap 0.0ms
+step   690 | loss 2.7419 | lr 0.454 | dt 9.833s | tok/s 53319 | mfu 25.9% | vram 53410MB | steps_left 310
+timing | fwd+bwd 9800.1ms  opt 33.0ms  gpu 9833.1ms  wall_gap 0.0ms
+step   695 | loss 2.7359 | lr 0.447 | dt 9.830s | tok/s 53334 | mfu 25.9% | vram 53410MB | steps_left 305
+timing | fwd+bwd 9797.7ms  opt 32.7ms  gpu 9830.4ms  wall_gap 0.0ms
+step   700 | loss 2.7280 | lr 0.440 | dt 9.828s | tok/s 53346 | mfu 25.9% | vram 53410MB | steps_left 300
+timing | fwd+bwd 9795.2ms  opt 32.9ms  gpu 9828.1ms  wall_gap 0.0ms
+[eval] step 700 | val_bpb 0.7012
+step   705 | loss 2.7231 | lr 0.433 | dt 9.834s | tok/s 53311 | mfu 25.9% | vram 53410MB | steps_left 295
+timing | fwd+bwd 9800.9ms  opt 33.6ms  gpu 9834.5ms  wall_gap 0.0ms
+step   710 | loss 2.7220 | lr 0.426 | dt 9.831s | tok/s 53330 | mfu 25.9% | vram 53410MB | steps_left 290
+timing | fwd+bwd 9798.0ms  opt 33.0ms  gpu 9831.0ms  wall_gap 0.0ms
+step   715 | loss 2.7122 | lr 0.419 | dt 9.836s | tok/s 53306 | mfu 25.9% | vram 53410MB | steps_left 285
+timing | fwd+bwd 9802.6ms  opt 32.9ms  gpu 9835.5ms  wall_gap 0.0ms
+step   720 | loss 2.7058 | lr 0.412 | dt 9.827s | tok/s 53353 | mfu 25.9% | vram 53410MB | steps_left 280
+timing | fwd+bwd 9794.2ms  opt 32.5ms  gpu 9826.7ms  wall_gap 0.0ms
+step   725 | loss 2.7064 | lr 0.405 | dt 9.834s | tok/s 53313 | mfu 25.9% | vram 53410MB | steps_left 275
+timing | fwd+bwd 9800.9ms  opt 33.3ms  gpu 9834.2ms  wall_gap 0.0ms
+[eval] step 725 | val_bpb 0.6516
+step   730 | loss 2.7007 | lr 0.398 | dt 9.836s | tok/s 53305 | mfu 25.9% | vram 53410MB | steps_left 270
+timing | fwd+bwd 9802.7ms  opt 32.9ms  gpu 9835.6ms  wall_gap 0.0ms
+step   735 | loss 2.6969 | lr 0.391 | dt 9.835s | tok/s 53308 | mfu 25.9% | vram 53410MB | steps_left 265
+timing | fwd+bwd 9802.3ms  opt 32.8ms  gpu 9835.1ms  wall_gap 0.0ms
+step   740 | loss 2.6912 | lr 0.384 | dt 9.829s | tok/s 53342 | mfu 25.9% | vram 53410MB | steps_left 260
+timing | fwd+bwd 9796.0ms  opt 32.8ms  gpu 9828.8ms  wall_gap 0.0ms
+step   745 | loss 2.6823 | lr 0.377 | dt 9.833s | tok/s 53321 | mfu 25.9% | vram 53410MB | steps_left 255
+timing | fwd+bwd 9799.4ms  opt 33.3ms  gpu 9832.7ms  wall_gap 0.0ms
+step   750 | loss 2.6852 | lr 0.370 | dt 9.835s | tok/s 53308 | mfu 25.9% | vram 53410MB | steps_left 250
+timing | fwd+bwd 9802.8ms  opt 32.4ms  gpu 9835.1ms  wall_gap 0.0ms
+[eval] step 750 | val_bpb 0.6565
+step   755 | loss 2.6804 | lr 0.363 | dt 9.836s | tok/s 53301 | mfu 25.9% | vram 53410MB | steps_left 245
+timing | fwd+bwd 9803.6ms  opt 32.7ms  gpu 9836.3ms  wall_gap 0.0ms
+step   760 | loss 2.6707 | lr 0.356 | dt 9.835s | tok/s 53307 | mfu 25.9% | vram 53410MB | steps_left 240
+timing | fwd+bwd 9802.6ms  opt 32.6ms  gpu 9835.2ms  wall_gap 0.0ms
+step   765 | loss 2.6717 | lr 0.349 | dt 9.833s | tok/s 53317 | mfu 25.9% | vram 53410MB | steps_left 235
+timing | fwd+bwd 9800.5ms  opt 32.8ms  gpu 9833.3ms  wall_gap 0.0ms
+step   770 | loss 2.6618 | lr 0.342 | dt 9.839s | tok/s 53284 | mfu 25.9% | vram 53410MB | steps_left 230
+timing | fwd+bwd 9806.3ms  opt 33.2ms  gpu 9839.5ms  wall_gap 0.0ms
+step   775 | loss 2.6548 | lr 0.335 | dt 9.824s | tok/s 53370 | mfu 25.9% | vram 53410MB | steps_left 225
+timing | fwd+bwd 9790.8ms  opt 32.8ms  gpu 9823.6ms  wall_gap 0.0ms
+[eval] step 775 | val_bpb 0.6249
+step   780 | loss 2.6556 | lr 0.328 | dt 9.836s | tok/s 53305 | mfu 25.9% | vram 53410MB | steps_left 220
+timing | fwd+bwd 9803.2ms  opt 32.4ms  gpu 9835.6ms  wall_gap 0.0ms
+step   785 | loss 2.6520 | lr 0.321 | dt 9.830s | tok/s 53337 | mfu 25.9% | vram 53410MB | steps_left 215
+timing | fwd+bwd 9796.7ms  opt 32.9ms  gpu 9829.6ms  wall_gap 0.0ms
+step   790 | loss 2.6535 | lr 0.314 | dt 9.832s | tok/s 53324 | mfu 25.9% | vram 53410MB | steps_left 210
+timing | fwd+bwd 9798.6ms  opt 33.4ms  gpu 9832.1ms  wall_gap 0.0ms
+step   795 | loss 2.6483 | lr 0.307 | dt 9.845s | tok/s 53255 | mfu 25.9% | vram 53410MB | steps_left 205
+timing | fwd+bwd 9812.0ms  opt 32.9ms  gpu 9844.9ms  wall_gap 0.0ms
+step   800 | loss 2.6428 | lr 0.300 | dt 9.825s | tok/s 53365 | mfu 25.9% | vram 53410MB | steps_left 200
+timing | fwd+bwd 9790.7ms  opt 33.8ms  gpu 9824.5ms  wall_gap 0.0ms
+[eval] step 800 | val_bpb 0.6194
+step   805 | loss 2.6390 | lr 0.293 | dt 9.844s | tok/s 53261 | mfu 25.9% | vram 53410MB | steps_left 195
+timing | fwd+bwd 9811.1ms  opt 32.7ms  gpu 9843.8ms  wall_gap 0.0ms
+step   810 | loss 2.6403 | lr 0.286 | dt 9.834s | tok/s 53313 | mfu 25.9% | vram 53410MB | steps_left 190
+timing | fwd+bwd 9801.1ms  opt 33.0ms  gpu 9834.1ms  wall_gap 0.0ms
+step   815 | loss 2.6475 | lr 0.279 | dt 9.828s | tok/s 53347 | mfu 25.9% | vram 53410MB | steps_left 185
+timing | fwd+bwd 9795.3ms  opt 32.6ms  gpu 9827.9ms  wall_gap 0.0ms
+step   820 | loss 2.6489 | lr 0.272 | dt 9.837s | tok/s 53295 | mfu 25.9% | vram 53410MB | steps_left 180
+timing | fwd+bwd 9804.6ms  opt 32.8ms  gpu 9837.4ms  wall_gap 0.0ms
+step   825 | loss 2.6477 | lr 0.265 | dt 9.823s | tok/s 53371 | mfu 25.9% | vram 53410MB | steps_left 175
+timing | fwd+bwd 9790.8ms  opt 32.6ms  gpu 9823.4ms  wall_gap 0.0ms
+[eval] step 825 | val_bpb 0.6122
+step   830 | loss 2.6451 | lr 0.258 | dt 9.825s | tok/s 53365 | mfu 25.9% | vram 53410MB | steps_left 170
+timing | fwd+bwd 9792.2ms  opt 32.4ms  gpu 9824.6ms  wall_gap 0.0ms
+step   835 | loss 2.6434 | lr 0.251 | dt 9.825s | tok/s 53365 | mfu 25.9% | vram 53410MB | steps_left 165
+timing | fwd+bwd 9791.5ms  opt 33.0ms  gpu 9824.5ms  wall_gap 0.0ms
+step   840 | loss 2.6427 | lr 0.244 | dt 9.832s | tok/s 53323 | mfu 25.9% | vram 53410MB | steps_left 160
+timing | fwd+bwd 9798.9ms  opt 33.5ms  gpu 9832.4ms  wall_gap 0.0ms
+step   845 | loss 2.6406 | lr 0.237 | dt 9.841s | tok/s 53276 | mfu 25.9% | vram 53410MB | steps_left 155
+timing | fwd+bwd 9808.5ms  opt 32.5ms  gpu 9841.0ms  wall_gap 0.0ms
+step   850 | loss 2.6331 | lr 0.230 | dt 9.838s | tok/s 53291 | mfu 25.9% | vram 53410MB | steps_left 150
+timing | fwd+bwd 9805.3ms  opt 32.9ms  gpu 9838.3ms  wall_gap 0.0ms
+[eval] step 850 | val_bpb 0.5911
+step   855 | loss 2.6308 | lr 0.223 | dt 9.840s | tok/s 53282 | mfu 25.9% | vram 53410MB | steps_left 145
+timing | fwd+bwd 9806.5ms  opt 33.4ms  gpu 9839.9ms  wall_gap 0.0ms
+step   860 | loss 2.6313 | lr 0.216 | dt 9.833s | tok/s 53317 | mfu 25.9% | vram 53410MB | steps_left 140
+timing | fwd+bwd 9800.3ms  opt 33.0ms  gpu 9833.4ms  wall_gap 0.0ms
+step   865 | loss 2.6283 | lr 0.209 | dt 9.837s | tok/s 53296 | mfu 25.9% | vram 53410MB | steps_left 135
+timing | fwd+bwd 9804.6ms  opt 32.6ms  gpu 9837.2ms  wall_gap 0.0ms
+step   870 | loss 2.6256 | lr 0.202 | dt 9.840s | tok/s 53283 | mfu 25.9% | vram 53410MB | steps_left 130
+timing | fwd+bwd 9806.5ms  opt 33.2ms  gpu 9839.7ms  wall_gap 0.0ms
+step   875 | loss 2.6196 | lr 0.195 | dt 9.838s | tok/s 53293 | mfu 25.9% | vram 53410MB | steps_left 125
+timing | fwd+bwd 9805.0ms  opt 32.7ms  gpu 9837.8ms  wall_gap 0.0ms
+[eval] step 875 | val_bpb 0.5857
+step   880 | loss 2.6076 | lr 0.188 | dt 9.841s | tok/s 53277 | mfu 25.9% | vram 53410MB | steps_left 120
+timing | fwd+bwd 9808.3ms  opt 32.4ms  gpu 9840.7ms  wall_gap 0.0ms
+step   885 | loss 2.6028 | lr 0.181 | dt 9.830s | tok/s 53334 | mfu 25.9% | vram 53410MB | steps_left 115
+timing | fwd+bwd 9798.0ms  opt 32.4ms  gpu 9830.4ms  wall_gap 0.0ms
+step   890 | loss 2.6068 | lr 0.174 | dt 9.835s | tok/s 53306 | mfu 25.9% | vram 53410MB | steps_left 110
+timing | fwd+bwd 9803.0ms  opt 32.4ms  gpu 9835.4ms  wall_gap 0.0ms
+step   895 | loss 2.6037 | lr 0.167 | dt 9.828s | tok/s 53348 | mfu 25.9% | vram 53410MB | steps_left 105
+timing | fwd+bwd 9794.8ms  opt 32.9ms  gpu 9827.7ms  wall_gap 0.0ms
+step   900 | loss 2.6007 | lr 0.160 | dt 9.828s | tok/s 53349 | mfu 25.9% | vram 53410MB | steps_left 100
+timing | fwd+bwd 9794.7ms  opt 32.8ms  gpu 9827.5ms  wall_gap 0.0ms
+[eval] step 900 | val_bpb 0.5840
+step   905 | loss 2.6047 | lr 0.153 | dt 9.829s | tok/s 53342 | mfu 25.9% | vram 53410MB | steps_left 95
+timing | fwd+bwd 9795.9ms  opt 32.9ms  gpu 9828.8ms  wall_gap 0.0ms
+step   910 | loss 2.5963 | lr 0.146 | dt 9.844s | tok/s 53259 | mfu 25.9% | vram 53410MB | steps_left 90
+timing | fwd+bwd 9810.4ms  opt 33.7ms  gpu 9844.1ms  wall_gap 0.0ms
+step   915 | loss 2.5956 | lr 0.139 | dt 9.840s | tok/s 53281 | mfu 25.9% | vram 53410MB | steps_left 85
+timing | fwd+bwd 9806.6ms  opt 33.5ms  gpu 9840.1ms  wall_gap 0.0ms
+step   920 | loss 2.6019 | lr 0.132 | dt 9.831s | tok/s 53332 | mfu 25.9% | vram 53410MB | steps_left 80
+timing | fwd+bwd 9798.0ms  opt 32.6ms  gpu 9830.6ms  wall_gap 0.0ms
+step   925 | loss 2.6047 | lr 0.125 | dt 9.843s | tok/s 53266 | mfu 25.9% | vram 53410MB | steps_left 75
+timing | fwd+bwd 9810.0ms  opt 32.9ms  gpu 9842.9ms  wall_gap 0.0ms
+[eval] step 925 | val_bpb 0.6173
+step   930 | loss 2.6084 | lr 0.118 | dt 9.839s | tok/s 53286 | mfu 25.9% | vram 53410MB | steps_left 70
+timing | fwd+bwd 9806.1ms  opt 32.9ms  gpu 9839.0ms  wall_gap 0.0ms
+step   935 | loss 2.6067 | lr 0.111 | dt 9.841s | tok/s 53274 | mfu 25.9% | vram 53410MB | steps_left 65
+timing | fwd+bwd 9808.7ms  opt 32.5ms  gpu 9841.3ms  wall_gap 0.0ms
+step   940 | loss 2.6005 | lr 0.104 | dt 9.832s | tok/s 53325 | mfu 25.9% | vram 53410MB | steps_left 60
+timing | fwd+bwd 9798.5ms  opt 33.4ms  gpu 9831.9ms  wall_gap 0.0ms
+step   945 | loss 2.5975 | lr 0.097 | dt 9.836s | tok/s 53305 | mfu 25.9% | vram 53410MB | steps_left 55
+timing | fwd+bwd 9803.2ms  opt 32.4ms  gpu 9835.6ms  wall_gap 0.0ms
+step   950 | loss 2.5987 | lr 0.090 | dt 9.836s | tok/s 53300 | mfu 25.9% | vram 53410MB | steps_left 50
+timing | fwd+bwd 9803.4ms  opt 33.1ms  gpu 9836.5ms  wall_gap 0.0ms
+[eval] step 950 | val_bpb 0.6084
+step   955 | loss 2.5959 | lr 0.083 | dt 9.838s | tok/s 53290 | mfu 25.9% | vram 53410MB | steps_left 45
+timing | fwd+bwd 9804.6ms  opt 33.8ms  gpu 9838.4ms  wall_gap 0.0ms
+step   960 | loss 2.5926 | lr 0.076 | dt 9.840s | tok/s 53280 | mfu 25.9% | vram 53410MB | steps_left 40
+timing | fwd+bwd 9807.2ms  opt 33.1ms  gpu 9840.3ms  wall_gap 0.0ms
+step   965 | loss 2.5888 | lr 0.069 | dt 9.838s | tok/s 53292 | mfu 25.9% | vram 53410MB | steps_left 35
+timing | fwd+bwd 9805.0ms  opt 33.1ms  gpu 9838.1ms  wall_gap 0.0ms
+step   970 | loss 2.5871 | lr 0.062 | dt 9.833s | tok/s 53321 | mfu 25.9% | vram 53410MB | steps_left 30
+timing | fwd+bwd 9800.0ms  opt 32.6ms  gpu 9832.6ms  wall_gap 0.0ms
+step   975 | loss 2.5915 | lr 0.055 | dt 9.831s | tok/s 53329 | mfu 25.9% | vram 53410MB | steps_left 25
+timing | fwd+bwd 9798.0ms  opt 33.2ms  gpu 9831.2ms  wall_gap 0.0ms
+[eval] step 975 | val_bpb 0.6141
+step   980 | loss 2.5899 | lr 0.048 | dt 9.833s | tok/s 53317 | mfu 25.9% | vram 53410MB | steps_left 20
+timing | fwd+bwd 9801.0ms  opt 32.4ms  gpu 9833.4ms  wall_gap 0.0ms
+step   985 | loss 2.5900 | lr 0.041 | dt 9.840s | tok/s 53280 | mfu 25.9% | vram 53410MB | steps_left 15
+timing | fwd+bwd 9807.2ms  opt 32.9ms  gpu 9840.2ms  wall_gap 0.0ms
+step   990 | loss 2.5914 | lr 0.034 | dt 9.842s | tok/s 53272 | mfu 25.9% | vram 53410MB | steps_left 10
+timing | fwd+bwd 9809.2ms  opt 32.5ms  gpu 9841.7ms  wall_gap 0.0ms
+step   995 | loss 2.5853 | lr 0.027 | dt 9.831s | tok/s 53328 | mfu 25.9% | vram 53410MB | steps_left 5
+timing | fwd+bwd 9798.4ms  opt 33.0ms  gpu 9831.3ms  wall_gap 0.0ms
+Training complete after 1000 steps.
+[checkpoint] saved /root/.cache/autoresearch/checkpoints/model.safetensors
+[eval] final | val_bpb 0.6111
+---
+training_seconds: 9744.8
+total_seconds:    10064.5
+mfu_percent:      25.83
+total_tokens_M:   524.3
+num_steps:        1000
+num_params_M:     427.8
+depth:            30

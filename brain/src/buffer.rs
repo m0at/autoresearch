@@ -339,7 +339,7 @@ impl BufferManager {
         let dq_sem_blocks = (t + 127) / 128; // kBlockM = 128 for hdim128
         let fa3_dq_semaphore = alloc::<i32>(&stream, dq_sem_blocks * b * N_HEAD)?;
         // FA3 scheduler metadata: round_up(B,4)*4 + 1 ints (tile_count_semaphore + metadata vectors)
-        let fa3_scheduler_meta = alloc::<i32>(&stream, 2048)?; // generous, ~8KB
+        let fa3_scheduler_meta = alloc::<i32>(&stream, 32768)?; // generous for T=32768
 
         // ── Fixed buffers ──
         let cos = alloc_bf16(&stream, t * (HEAD_DIM / 2))?;

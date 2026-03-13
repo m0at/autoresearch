@@ -47,3 +47,6 @@ prebuilt/
 # Training data (downloaded by prepare)
 data/
 engine/init_weights_*.safetensors
+
+# Junk artifacts from SCP mishaps
+root@/

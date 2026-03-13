@@ -363,6 +363,10 @@ remote bash -l <<TRAIN | tee "$REPO_DIR/results/train.log"
 set -euo pipefail
 source "\$HOME/.cargo/env"
 cd autoresearch
+export BATCH_SIZE=4
+export MAX_STEPS=1000
+export COOLDOWN_STEPS=500
+export EVAL_EVERY=25
 cargo run --release --features cuda --no-default-features -- train --profile $HW_PROFILE --diagnostics
 TRAIN
 TRAIN_ELAPSED=$(( $(date +%s) - TRAIN_START ))

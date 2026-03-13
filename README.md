@@ -1,10 +1,12 @@
 # autoresearch
 
-A Rust + CUDA GPT training engine built on top of Karpathy's `autoresearch` framework. At identical settings to the Python reference run (**0.992095 bpb** at 1000 steps), our Rust engine scores **0.8673 bpb** — a **0.125 bpb gap** driven by bin-packing, depth=30, and LR tuning. Neuron rinsing: disabled — Muon prevents neuron death (zero reinit events at all thresholds).
+A Rust + CUDA GPT training engine, built from scratch on top of Karpathy's `autoresearch` framework. No Python in the training loop, no PyTorch, no autograd — every forward/backward pass and optimizer step is hand-written Rust + CUDA, linking only against cuBLAS and Flash Attention 3.
+
+**Best result: 0.5392 val_bpb** with a 428M parameter model (D=1024, L=30, T=32768) in 1000 steps on a single H100 SXM — **0.453 bpb better** than the Karpathy Python baseline (0.9922) at the same step count.
 
 ---
 
-![val_bpb comparison](brain_vs_karpathy.png)
+![training comparison](training_comparison.png)
 
 
 
@@ -13,7 +15,9 @@ A Rust + CUDA GPT training engine built on top of Karpathy's `autoresearch` fram
 
 Karpathy published a small GPT training run in Python + PyTorch (`karpathy/autoresearch`). We rebuilt the training engine from scratch in Rust and CUDA — no Python in the training loop, no PyTorch, no autograd framework. Every forward pass, backward pass, and optimizer step is hand-written. The binary links only against CUDA, cuBLAS, and Flash Attention 3.
 
-At identical settings, the Python reference run scores **0.992095 bpb** at 1000 steps; our Rust engine at the same settings scores **0.9816 bpb** — a **0.036 bpb gap** from a single change: best-fit bin-packing of training sequences instead of sequential reads. From there, systematic architecture search on 4× H100 SXM swept depth, window size, MLP ratio, init scale, and learning rate, pushing to **0.8673 bpb** — a total gap of **0.125 bpb** over the Python baseline. No new data, no extra steps, no tricks — just finding what the hardware can do within the fixed compute budget.
+**Phase 1 (architecture search):** At identical settings, the Python reference scores **0.9922 bpb** at 1000 steps; our Rust engine with bin-packing alone scores **0.9816 bpb**. Systematic search on 4× H100 SXM swept depth, window size, MLP ratio, init scale, and learning rate, pushing to **0.8673 bpb** — a **0.125 bpb gap** over the Python baseline at 119.5M params.
+
+**Phase 2 (scaling up):** Reworked the data pipeline for variable-length contexts (up to 32K tokens), added gradient accumulation support for large models at small batch sizes, and scaled the architecture to **428M params** (D=1024, L=30, MLP=4096, T=32768). With undertraining-aware hyperparameters (higher weight decay, lower peak LR, 30% cooldown), the 428M model reached **0.5392 val_bpb** — a **0.453 bpb improvement** over Karpathy's baseline in the same 1000 steps, despite being heavily undertrained at only 1.2 tokens per parameter.
 
 ---
 
@@ -21,7 +25,7 @@ At identical settings, the Python reference run scores **0.992095 bpb** at 1000 
 
 ## What is val_bpb?
 
-**Bits per byte on held-out validation data.** Lower is better — the model needs fewer bits to encode each byte of unseen text, meaning it generalizes better. It is a direct measure of generalization, not memorization. We optimize exclusively for this at a fixed compute budget (1000 optimizer steps, 524,288 tokens/step, 1× H100 SXM).
+**Bits per byte on held-out validation data.** Lower is better — the model needs fewer bits to encode each byte of unseen text, meaning it generalizes better. It is a direct measure of generalization, not memorization. We optimize exclusively for this at a fixed step budget (1000 optimizer steps, 524,288 tokens/step, 1× H100 SXM). Current best: **0.5392 bpb** (428M params).
 
 ---
 
@@ -44,11 +48,37 @@ The entire gap at 700 steps is the data pipeline. Best-fit bin-packing eliminate
 
 | Run | model | val_bpb |
 |-----|-------|---------|
-| Python reference (Karpathy) | depth=12, d_model=768, ~124M params | 0.9921 |
-| **Rust engine (optimized)** | **depth=30, d_model=512, 119.5M params** | **0.8673** |
-| **total gap** | | **−0.125** |
+| Python reference (Karpathy) | depth=12, d_model=768, ~124M params | 0.9922 |
+| Rust engine (Phase 1) | depth=30, d_model=512, 119.5M params | 0.8673 |
+| **Rust engine (Phase 2)** | **depth=30, d_model=1024, 428M params** | **0.5392** |
+| **total gap** | | **−0.453** |
 
-The 0.125 bpb improvement breaks down as: ~0.011 from bin-packing, ~0.114 from depth=30 vs depth=8, ~0.007 from embedding LR tuning, and residual from LR optimum (0.042 vs 0.04). Same compute budget, same data, same 1000 steps.
+Phase 1 gap (0.125 bpb) breaks down as: ~0.011 from bin-packing, ~0.114 from depth=30 vs depth=8, ~0.007 from embedding LR tuning, and residual from LR optimum. Phase 2 gap (additional 0.328 bpb) comes from scaling to 4× wider model with 32K context, enabled by reworking the data pipeline and tuning hyperparameters for the undertrained regime. Same data, same 1000 steps, single H100.
+
+### Phase 2 — Scaling experiments (1000 steps, T=32768)
+
+Scaled the model to 428M params (D=1024, 8 heads, MLP=4096) with 32768-token context. At 524M total training tokens, this is only 1.2 tokens/parameter — 17× below Chinchilla-optimal — so hyperparameters were tuned specifically for the undertrained regime.
+
+**Cooldown ablation** (all other settings identical):
+
+| Cooldown | Steps at peak LR | val_bpb | Notes |
+|----------|-------------------|---------|-------|
+| 70% (700 steps) | 300 | 0.6111 | Too little time at full LR |
+| **30% (300 steps)** | **700** | **0.5392** | **Best — maximizes learning before decay** |
+
+The 30% cooldown wins by 0.072 bpb. In the undertrained regime, the model needs maximum time at full learning rate to absorb the limited data. This is the **opposite** of the Phase 1 finding (50% optimal at 119.5M params), confirming that cooldown ratio must be tuned per token/param ratio.
+
+**Undertraining-aware hyperparameters used:**
+
+| Setting | Phase 1 (119.5M) | Phase 2 (428M) | Why |
+|---------|-------------------|----------------|-----|
+| Peak LR | 0.04 | 0.02 (0.5×) | Lower LR prevents memorization of limited data |
+| Weight decay | 0.2 | 0.3 (1.5×) | Stronger regularization for data-starved model |
+| Cooldown | 50% | 30% | More steps at full LR to maximize absorption |
+| Final LR frac | 0.05 | 0.02 | Gentler floor |
+| Batch size | 64 | 4 (+ 4× grad accum) | VRAM constraint at T=32768 |
+
+VRAM usage: 48.6 GB allocated, 53.4 GB peak (of 80 GB available). Training speed: ~9.9s/step, 53K tok/s, 25.5% MFU. Total wall time: ~2.8 hours.
 
 ### Phase 1 — Depth sweep (S=256, emb_lr=0.9, cooldown=50%, 1000 steps, seed=42)
 
@@ -220,14 +250,17 @@ All experiments use seed=42 for weight initialization and data ordering. This co
 
 ## Architecture
 
+### Phase 2 config (428M params — best result)
+
 | Component | Value | Rationale |
 |-----------|-------|-----------|
-| Layers | 30 | compute-optimal at 524M tokens, d_model=512 |
-| d_model | 512 | matches upstream; width not swept yet |
-| Heads | 4 (GQA, kv=4) | head_dim=128, no GQA compression |
+| Layers | 30 | compute-optimal depth, validated in Phase 1 sweep |
+| d_model | 1024 | 4× wider than Phase 1; scales well even undertrained |
+| Heads | 8 (GQA, kv=8) | head_dim=128, required by FA3 |
+| MLP dim | 4096 | 4× ratio, standard |
 | Vocab | 8192 | custom BPE, GPT-4 split pattern |
-| Seq len | 2048 | matches upstream |
-| Attention | SSSSL repeating | S=256 local, L=2048 full, 80% ops local |
+| Seq len | 32768 | 16× increase from Phase 1, enabled by pipeline rework |
+| Attention | SSSSL repeating | S=256 local, T=32768 full, 80% ops local |
 | RoPE base | 200,000 | long-context position encoding |
 | Value embeddings | layers 1,3,5,7 | VE_GATE_CH=32, ResFormer-style |
 | Residual scale | learned λ per layer | init=1.0 |
@@ -236,31 +269,51 @@ All experiments use seed=42 for weight initialization and data ordering. This co
 | Init scale | 0.68 | σ = 0.68 / sqrt(d_model) |
 | Activation | ReLU² | squared ReLU, sparse and fast |
 
+<details>
+<summary>Phase 1 config (119.5M params)</summary>
+
+Same as above except: d_model=512, 4 heads, MLP=2048, seq_len=2048, full-attention window=2048.
+
+</details>
+
 ---
 
 
 
 ## Training Setup
 
-**Hardware:** 4× H100 SXM 80GB, ~25% MFU at d30, B=64
+**Hardware:** 1–4× H100 SXM 80GB (single GPU per run, multiple runs in parallel for sweeps)
 
 **Data:** `karpathy/climbmix-400b-shuffle`, streamed from HuggingFace parquets
 **Tokenizer:** custom BPE, vocab=8192
 **Steps:** 1000, seed=42
-**Batch:** B=64 × 4 grad-accum = 524,288 tokens/step
+**Batch:** 524,288 tokens/step (via gradient accumulation — B×T×accum_steps = 524,288)
+
+| Config | Batch size | Context | Grad accum | Tokens/step | MFU |
+|--------|-----------|---------|------------|-------------|-----|
+| Phase 1 (119.5M) | 64 | 2048 | 4× | 524,288 | ~25% |
+| Phase 2 (428M) | 4 | 32768 | 4× | 524,288 | ~25.5% |
 
 **Schedule (WSD):**
-- Stable phase: steps 0–499, LR = peak
-- Cooldown phase: steps 500–999, linear decay to `final_lr_frac × peak`
+- Stable phase: steps 0 to `max_steps - cooldown_steps`, LR = peak
+- Cooldown phase: linear decay to `final_lr_frac × peak`
+- Phase 1: 50% cooldown (500 steps stable, 500 cooldown)
+- Phase 2: 30% cooldown (700 steps stable, 300 cooldown) — tuned for undertrained regime
 
 **Optimizer:**
-- Muon for weight matrices (momentum warmup 0.85→0.95 over 200 steps, peak_lr=0.04, wd=0.2 decaying to 0)
-- AdamW for embeddings (lr=0.9 × scale, betas=(0.8, 0.95))
-- AdamW for unembedding (lr=0.005 × scale)
-- AdamW for scalars/norms (lr=0.5 × scale)
+- Muon for weight matrices (momentum warmup 0.85→0.95 over 200 steps, wd decaying to 0)
+- AdamW for embeddings (betas=(0.8, 0.95))
+- AdamW for unembedding, scalars/norms
 - Muon aspect-ratio scaling: `effective_lr = peak_lr × sqrt(max(1, rows/cols))`
+- All LRs auto-scale proportionally when `PEAK_LR` is changed
 
-Override via env var: `PEAK_LR`, `COOLDOWN_STEPS`, `MAX_STEPS`, `EMBEDDING_LR`, `WEIGHT_DECAY`, `BATCH_SIZE`, `EVAL_EVERY`, etc.
+| Setting | Phase 1 | Phase 2 |
+|---------|---------|---------|
+| peak_lr | 0.04 | 0.02 |
+| weight_decay | 0.2 | 0.3 |
+| final_lr_frac | 0.05 | 0.02 |
+
+Override via env var: `PEAK_LR`, `COOLDOWN_STEPS`, `MAX_STEPS`, `WEIGHT_DECAY`, `BATCH_SIZE`, `EVAL_EVERY`, `FINAL_LR_FRAC`, `SCHEDULE`, etc.
 
 ---
 
@@ -268,15 +321,37 @@ Override via env var: `PEAK_LR`, `COOLDOWN_STEPS`, `MAX_STEPS`, `EMBEDDING_LR`, 
 
 ## Data Pipeline
 
-```bash
-NUM_TRAIN_SHARDS=794 python3 brain/feeder.py --stream --prefetch 4 2>/tmp/feeder.log \
-  | BATCH_SIZE=64 MAX_STEPS=1000 COOLDOWN_STEPS=500 /root/autoresearch-engine train \
-      --stream-input \
-      --data-dir /root/.cache/autoresearch/shards_packed \
-      --seed 42 > /tmp/train.log 2>&1
+### Overview
+
+The data pipeline was reworked in Phase 2 to support variable-length contexts up to 32K tokens while maintaining 100% token utilization. The feeder and engine communicate via a raw binary stdin protocol — no serialization overhead.
+
+```
+HuggingFace parquets → feeder.py (tokenize + bin-pack) → stdout pipe → Rust engine stdin
 ```
 
-`feeder.py` streams parquets from HuggingFace, tokenizes with BOS, and **best-fit bin-packs** sequences into 2049-token rows. The Rust engine reads rows from stdin via `StdinDataLoader`. This is the source of the 0.036 bpb improvement over the Python reference: bin-packing guarantees 100% token utilization, while sequential reads leave gaps that get padded, wasting up to ~40% of each batch.
+### Phase 2 pipeline (32K context)
+
+```bash
+python3 feeder.py --stream --prefetch 4 2>/root/feeder.log \
+  | BATCH_SIZE=4 MAX_STEPS=1000 COOLDOWN_STEPS=300 WEIGHT_DECAY=0.3 PEAK_LR=0.02 \
+    /root/autoresearch-brain train --stream-input \
+      --data-dir /root/.cache/autoresearch/shards_packed \
+      > /root/train.log 2>&1
+```
+
+### Key changes from Phase 1
+
+**Variable-length row packing:** `feeder.py` now packs into rows of `SEQ+1` tokens (configurable via `MAX_SEQ_LEN`). Phase 1 used 2049-token rows (SEQ=2048); Phase 2 uses 32769-token rows (SEQ=32768). The binary protocol is unchanged — just wider rows. Each row is `(SEQ+1) × 2 bytes` of little-endian u16 tokens, no headers.
+
+**Shard concatenation for long contexts:** Validation shards are pre-packed at 2049 tokens/row. For SEQ > 2048, the engine's shard loader concatenates multiple short rows to fill one long sequence: `ceil((SEQ+1) / shard_row_len)` rows are stitched together per training sequence. This is transparent — no changes to the shard files themselves.
+
+**Gradient accumulation:** At T=32768 with D=1024, only B=4 sequences fit in 80GB VRAM (~49GB allocated). To maintain the 524K tokens/step budget: `4 × 32768 × 4 accum steps = 524,288 tokens/step`. Gradients are accumulated across micro-batches before the optimizer step.
+
+**Prefetch tuning:** The feeder runs a background packing thread with a configurable prefetch queue (`--prefetch N`). At B=4, T=32K, each row is 64KB — the prefetch queue stays small while keeping the GPU fed.
+
+### Best-fit bin-packing
+
+`feeder.py` tokenizes documents with BOS, maintains a buffer of 1000 tokenized documents, and for each row finds the document that best fills the remaining capacity. This eliminates padding waste entirely — every token in every batch is real training signal. This alone accounts for a 0.036 bpb improvement over sequential reads (which waste ~40% of each batch as padding).
 
 **Important:** `NUM_TRAIN_SHARDS=794` on the feeder only. Setting it on the engine causes an out-of-bounds crash on the 26 val shards.
 
@@ -438,7 +513,7 @@ scp -P <port> /tmp/autoresearch-engine-neuronrinse root@<host>:/root/
 
 ### GPU memory management
 
-Each training run uses ~52GB of the 80GB H100. Only one run per instance at a time. Before launching, verify the GPU is clear:
+VRAM usage depends on model size and context length. Phase 1 (119.5M, T=2048) uses ~47GB; Phase 2 (428M, T=32768) uses ~53GB. Only one run per instance at a time. Before launching, verify the GPU is clear:
 ```bash
 ssh -p <port> root@<host> 'nvidia-smi | grep MiB'
 # Should show ~14MiB (idle). If it shows 50GB+, kill the stale process:
@@ -516,19 +591,21 @@ These changes are purely mechanical (no model changes, no hyperparameter impact)
 
 
 
-## Future Work (post-publication)
+## Future Work
 
 ### Full single-epoch run
 
-The climbmix-400b-shuffle dataset has 6,542 training shards. At our current data throughput, consuming all shards once takes approximately **8,200 optimizer steps** (~3.4 hours on a single H100). We plan to run this after publishing current findings.
+The climbmix-400b-shuffle dataset has 6,542 training shards (~4.2B tokens). At the Phase 2 model size (428M params), a full epoch would give ~9.8 tokens/param — still below Chinchilla-optimal (20:1) but dramatically better than the current 1.2:1 ratio. Expected significant val_bpb improvement.
 
-All infrastructure for this is already in the repo:
+All infrastructure is in place:
 
-- **Feeder:** `feeder.py --stream` streams all shards sequentially from HuggingFace. Set `NUM_TRAIN_SHARDS=6542` and let it run to EOF.
-- **Cooldown trigger:** the engine supports a trigger-file-based cooldown (`cooldown_trigger_path`). Run with `MAX_STEPS` unset, pipe feeder to engine, and write the trigger file when the feeder finishes. The engine will cooldown for `COOLDOWN_STEPS` steps from that point and stop. No need to know the step count in advance.
-- **LR schedule:** the 50% WSD cooldown ratio transfers directly — set `COOLDOWN_STEPS=4100` (50% of ~8200) and trigger at step ~4100 when the feeder signals EOF.
+- **Feeder:** `feeder.py --stream` streams all shards from HuggingFace. Let it run to EOF.
+- **Cooldown trigger:** the engine supports trigger-file-based cooldown. Run with `MAX_STEPS` unset, write a trigger file when the feeder finishes.
+- **Schedule:** the 30% cooldown finding from Phase 2 should transfer — most of the budget at full LR, short cooldown at the end.
 
-Anyone can run this now with the existing binary and feeder. Expected val_bpb at full epoch: unknown, but the depth=30 architecture is well within the compute-optimal regime for 524M×8 = ~4.2B tokens.
+### Further scaling
+
+The 428M model at 1.2 tokens/param already reaches 0.5392 bpb. With a full epoch (9.8 tokens/param), the same model should improve substantially. The pipeline supports arbitrary model sizes and context lengths — the binding constraint is VRAM (80GB per H100) and data volume.
 
 ### Incorporating additional data
 

@@ -38,8 +38,8 @@ import pyarrow.parquet as pq
 # Constants — must match Python reference exactly
 # ---------------------------------------------------------------------------
 
-MAX_SEQ_LEN = 32768
-ROW_CAPACITY = MAX_SEQ_LEN + 1  # 32769 tokens per row
+MAX_SEQ_LEN = 2048
+ROW_CAPACITY = MAX_SEQ_LEN + 1  # 2049 tokens per row
 VOCAB_SIZE = 8192
 MAX_SHARD = 6542
 VAL_SHARD = MAX_SHARD

@@ -332,8 +332,8 @@ const ROW_LEN: usize = SEQ + 1; // 2049 tokens per row
 const ROW_BYTES: usize = ROW_LEN * 2;
 
 // How many parsed batches to keep buffered ahead of the GPU.
-// At B=128, each batch is ~512KB. 16 batches ≈ 8MB of look-ahead,
-// enough to absorb feeder jitter at ~520ms/step.
+// At B=8, T=32768, each batch is ~512KB. 16 batches ≈ 8MB of look-ahead,
+// enough to absorb feeder jitter.
 const STDIN_PREFETCH_BATCHES: usize = 16;
 
 /// Stdin loader with a background reader thread.
@@ -524,56 +524,74 @@ impl ShardDataLoader {
     /// The shard seq_len should be SEQ + 1.
     fn next_batch(&mut self) -> (Vec<u32>, Vec<u32>) {
         let b = self.batch_size;
-        let t = SEQ; // input/target length = SEQ (shard row is SEQ+1)
-        let mut input_ids = Vec::with_capacity(b * t);
-        let mut targets = Vec::with_capacity(b * t);
-
-        for _ in 0..b {
-            let si = self.shard_order[self.shard_idx];
-            let shard = &self.shards[si];
-            let row = shard.row(self.row_order[self.row_idx]);
-
-            // row is shard_seq_len tokens; take [0..T] as input, [1..T+1] as target
-            for j in 0..t {
-                input_ids.push(row[j] as u32);
-            }
-            for j in 1..=t {
-                targets.push(row[j] as u32);
-            }
-
-            self.row_idx += 1;
-            if self.row_idx >= shard.num_rows() {
-                self.advance_shard();
-            }
-        }
-
+        let t = SEQ;
+        let mut input_ids = vec![0u32; b * t];
+        let mut targets = vec![0u32; b * t];
+        self.next_batch_into(&mut input_ids, &mut targets);
         (input_ids, targets)
     }
 
     /// Write the next batch directly into pre-allocated pinned buffers.
     /// Avoids Vec allocation on every micro-step.
+    ///
+    /// Handles shard rows shorter than SEQ+1 by concatenating multiple rows.
     fn next_batch_into(&mut self, input_ids: &mut [u32], targets: &mut [u32]) {
         let b = self.batch_size;
         let t = SEQ;
         debug_assert_eq!(input_ids.len(), b * t);
         debug_assert_eq!(targets.len(), b * t);
 
-        for row_in_batch in 0..b {
-            let si = self.shard_order[self.shard_idx];
-            let shard = &self.shards[si];
-            let row = shard.row(self.row_order[self.row_idx]);
-            let off = row_in_batch * t;
+        let shard_sl = self.shards[self.shard_order[0]].header.seq_len as usize;
+        let needed = t + 1; // SEQ + 1 tokens to get SEQ inputs + SEQ targets
 
-            for j in 0..t {
-                input_ids[off + j] = row[j] as u32;
-            }
-            for j in 0..t {
-                targets[off + j] = row[j + 1] as u32;
-            }
+        if shard_sl >= needed {
+            // Fast path: shard rows are long enough
+            for row_in_batch in 0..b {
+                let si = self.shard_order[self.shard_idx];
+                let shard = &self.shards[si];
+                let row = shard.row(self.row_order[self.row_idx]);
+                let off = row_in_batch * t;
 
-            self.row_idx += 1;
-            if self.row_idx >= shard.num_rows() {
-                self.advance_shard();
+                for j in 0..t {
+                    input_ids[off + j] = row[j] as u32;
+                }
+                for j in 0..t {
+                    targets[off + j] = row[j + 1] as u32;
+                }
+
+                self.row_idx += 1;
+                if self.row_idx >= shard.num_rows() {
+                    self.advance_shard();
+                }
+            }
+        } else {
+            // Concat path: stitch multiple short shard rows into one long sequence.
+            // Each shard row is `shard_sl` tokens. We concatenate enough rows to
+            // fill SEQ+1 tokens, then take [0..SEQ] as input and [1..SEQ+1] as target.
+            let rows_per_seq = (needed + shard_sl - 1) / shard_sl;
+            let mut concat_buf = vec![0u16; rows_per_seq * shard_sl];
+
+            for row_in_batch in 0..b {
+                // Fill concat buffer from consecutive shard rows
+                for r in 0..rows_per_seq {
+                    let si = self.shard_order[self.shard_idx];
+                    let shard = &self.shards[si];
+                    let row = shard.row(self.row_order[self.row_idx]);
+                    concat_buf[r * shard_sl..(r + 1) * shard_sl].copy_from_slice(row);
+
+                    self.row_idx += 1;
+                    if self.row_idx >= shard.num_rows() {
+                        self.advance_shard();
+                    }
+                }
+
+                let off = row_in_batch * t;
+                for j in 0..t {
+                    input_ids[off + j] = concat_buf[j] as u32;
+                }
+                for j in 0..t {
+                    targets[off + j] = concat_buf[j + 1] as u32;
+                }
             }
         }
     }
@@ -621,7 +639,7 @@ pub struct TrainConfig {
 impl Default for TrainConfig {
     fn default() -> Self {
         Self {
-            device_batch_size: 128,
+            device_batch_size: 8,
             total_batch_size: 524288,
             load_checkpoint: None,
             diagnostic_steps: None,

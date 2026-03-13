@@ -1,0 +1,8 @@
+Welcome to vast.ai. If authentication fails, try again after a few seconds, and double check your ssh key.
+Have fun!
+[feeder] tokenizer loaded, vocab=8192, bos=8188
+[feeder] 10000 rows, 2 rows/s, 6197s
+[feeder] rows=16072 elapsed=10080.4s rate=2 rows/s
+[feeder] pack=5.6s write=9953.7s other=121.2s
+Exception ignored in: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+BrokenPipeError: [Errno 32] Broken pipe

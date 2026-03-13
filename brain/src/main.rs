@@ -39,7 +39,7 @@ fn main() -> Result<()> {
     let cooldown_steps: usize = std::env::var("COOLDOWN_STEPS")
         .ok().and_then(|s| s.parse().ok()).unwrap_or(500);
     let batch_size: usize = std::env::var("BATCH_SIZE")
-        .ok().and_then(|s| s.parse().ok()).unwrap_or(64);
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(8);
     let num_train_shards: Option<usize> = std::env::var("NUM_TRAIN_SHARDS")
         .ok().and_then(|s| s.parse().ok());
     let total_batch: usize = std::env::var("TOTAL_BATCH")

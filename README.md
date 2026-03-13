@@ -16,11 +16,13 @@ A Rust + CUDA GPT training engine, built from scratch on top of Karpathy's `auto
 
 The central result of this project is that **deliberately overparameterized models beat compute-optimal models on val_bpb**, even when severely undertrained — if you tune the training recipe for the regime.
 
-| Model | Params | Tokens/param | val_bpb | vs Karpathy |
-|-------|--------|-------------|---------|-------------|
-| Karpathy Python baseline | 124M | 4.2 | 0.9922 | — |
-| Rust engine Phase 1 | 119.5M | 4.4 | 0.8673 | −0.125 |
-| **Rust engine Phase 2** | **428M** | **1.2** | **0.5392** | **−0.453** |
+| Model | Architecture | Params | Tokens/param | val_bpb | vs Karpathy |
+|-------|-------------|--------|-------------|---------|-------------|
+| Karpathy Python baseline | d=768, L=12 (his code, his settings) | 124M | 4.2 | 0.9922 | — |
+| Rust engine Phase 1 | d=512, L=30 (our arch) | 119.5M | 4.4 | 0.8673 | −0.125 |
+| **Rust engine Phase 2** | **d=1024, L=30 (our arch)** | **428M** | **1.2** | **0.5392** | **−0.453** |
+
+Note: the Karpathy baseline is his original model run unmodified — 124M params, d_model=768, 12 layers. Our Phase 1 model is a different architecture (narrower, much deeper) that happens to land at a similar param count (119.5M). We did not change Karpathy's model; we built a new one and compared.
 
 The 428M model trains on only 1.2 tokens per parameter — 17× below Chinchilla-optimal — yet crushes both the 119.5M model (which is near Chinchilla-optimal at 4.4 tokens/param) and the Python baseline. Per-token learning efficiency scales with model size even deep into the undertrained regime.
 

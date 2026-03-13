@@ -501,7 +501,7 @@ bash fa3/build_fa3.sh   # clones flash-attention, compiles sm_90a objects, produ
 FLASH_ATTN_V3_BUILD_DIR=fa3/build cargo build --release
 
 # 5. Push binary to run instances
-scp target/release/autoresearch-engine root@<run-host>:/root/autoresearch-engine
+scp target/release/autoresearch-brain root@<run-host>:/root/autoresearch-brain
 
 # 6. Push val shards to run instances (98MB, do once)
 # From local or another instance via local relay:
@@ -519,7 +519,7 @@ The repo is private. SSH keys are not automatically present on new instances, an
 ```bash
 rsync -az -e "ssh -p <build-port>" \
   --exclude=target --exclude='.git' --exclude='fa3/build' \
-  engine/ root@<build-host>:/root/autoresearch-src/brain/
+  brain/ root@<build-host>:/root/autoresearch-src/brain/
 ```
 
 After a code change, rebuild takes ~3s (incremental, FA3 already cached):
@@ -549,10 +549,10 @@ ssh -p <port> root@<host> 'kill -9 $(nvidia-smi --query-compute-apps=pid --forma
 `NUM_TRAIN_SHARDS=794` must be set **on the feeder only**, not on the engine:
 ```bash
 # Correct:
-NUM_TRAIN_SHARDS=794 python3 feeder.py --stream | ... autoresearch-engine train ...
+NUM_TRAIN_SHARDS=794 python3 feeder.py --stream | ... autoresearch-brain train ...
 
 # Wrong — causes val shard index out-of-bounds crash:
-NUM_TRAIN_SHARDS=794 autoresearch-engine train ...
+NUM_TRAIN_SHARDS=794 autoresearch-brain train ...
 ```
 
 ---
@@ -572,7 +572,7 @@ FLASH_ATTN_V3_BUILD_DIR=fa3/build cargo build --release
 **Deploy to run instance:**
 
 ```bash
-scp -P <run-port> target/release/autoresearch-engine root@<run-host>:/root/autoresearch-engine
+scp -P <run-port> target/release/autoresearch-brain root@<run-host>:/root/autoresearch-brain
 ```
 
 ---

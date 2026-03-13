@@ -22,7 +22,7 @@ dev/
 
 # Rust build artifacts
 /target
-/engine/target
+/engine/
 
 # Secrets — never commit
 .env
@@ -46,7 +46,5 @@ prebuilt/
 
 # Training data (downloaded by prepare)
 data/
-engine/init_weights_*.safetensors
-
 # Junk artifacts from SCP mishaps
 root@/

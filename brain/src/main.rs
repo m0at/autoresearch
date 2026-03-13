@@ -37,9 +37,9 @@ fn main() -> Result<()> {
     let max_steps: Option<usize> = max_steps_cli.or_else(|| std::env::var("MAX_STEPS")
         .ok().and_then(|s| s.parse::<usize>().ok()).filter(|&n| n > 0));
     let cooldown_steps: usize = std::env::var("COOLDOWN_STEPS")
-        .ok().and_then(|s| s.parse().ok()).unwrap_or(500);
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(300);
     let batch_size: usize = std::env::var("BATCH_SIZE")
-        .ok().and_then(|s| s.parse().ok()).unwrap_or(8);
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(4);
     let num_train_shards: Option<usize> = std::env::var("NUM_TRAIN_SHARDS")
         .ok().and_then(|s| s.parse().ok());
     let total_batch: usize = std::env::var("TOTAL_BATCH")

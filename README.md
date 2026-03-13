@@ -147,9 +147,9 @@ VRAM usage: 48.6 GB allocated, 53.4 GB peak (of 80 GB available). Training speed
 
 Depth=30 is the optimum. Improvement is monotonic from depth=8 to 30; beyond that the model is too large to train well within 524M tokens. Depths 31–34 form a broad shoulder (0.8609–0.8712), confirming the peak is around 30. At depth=60 the model diverges from step 1 — 60 layers with this init scale and LR is numerically unstable without additional stabilization (e.g. smaller init, lower LR, or per-layer gradient clipping).
 
-The binding constraint is compute, not VRAM: d30 uses ~50GB of the 80GB available at B=64.
+At Phase 1 scale (d=512, B=64), the binding constraint was compute, not VRAM (~50GB of 80GB). At Phase 2 scale (d=1024, T=32768), VRAM becomes the constraint — B=4 is the maximum batch size that fits.
 
-### Phase 2 — Window size sweep (depth=30, all else equal)
+#### Window size sweep (depth=30, all else equal)
 
 | S (local window) | val_bpb | notes |
 |------------------|---------|-------|
@@ -161,7 +161,7 @@ S=256 wins. Both narrower (S=64) and wider (S=1024) windows are worse. S=64 miss
 
 The SSSSL pattern (four local layers per one full-context layer per group) is efficient: 4/5 of all attention operations run on local windows, keeping memory and compute low, while the full-context layers every 5 layers provide global information flow.
 
-### Phase 4 — Hyperparameter knobs (depth=30, S=256 baseline)
+#### Hyperparameter knobs (depth=30, S=256 baseline)
 
 | experiment | val_bpb | vs baseline | verdict |
 |------------|---------|-------------|---------|
@@ -174,7 +174,7 @@ The SSSSL pattern (four local layers per one full-context layer per group) is ef
 | LR=0.08 (d33 proxy) | 0.8728 | +0.012 | too high |
 | depth=60 | diverged | — | unstable |
 
-### Phase 4 — LR sweep on correct d30 binary (seed=42, 1000 steps, FINAL_LR_FRAC=0.05)
+#### LR sweep (d30, seed=42, 1000 steps, FINAL_LR_FRAC=0.05)
 
 Full sweep from 0.003 to 0.065 — optimum is near 0.042. Results in ascending LR order:
 
@@ -205,7 +205,7 @@ Learning curves (val_bpb by step) for the fine sweep — all three tracked in `r
 | 950 | 0.8830 | 0.8766 | 0.8715 |
 | final | 0.8754 | 0.8687 | **0.8673** |
 
-### Phase 5 — Neuron rinsing study
+#### Neuron rinsing study
 
 Neuron rinsing: at each reinit step (200, 400), layers with EMA(act_norm × grad_norm) score below 50% of the mean have their MLP weights re-randomized and Muon momentum zeroed. A 2× → 1× gradient boost is applied over 50 steps post-reinit. Scoring is generalization-aware: val gradient norms are captured at each eval step, and the ratio val_grad / train_grad is folded into the EMA to suppress memorizing layers before they flatline.
 
@@ -235,9 +235,9 @@ Note: Muon's Newton-Schulz orthogonalization normalizes gradient norms across la
 
 ### Window size S = 256
 
-S=256 beats both S=64 and S=1024. The model architecture uses an SSSSL repeating pattern: four sliding-window attention layers (S=256) followed by one full-context layer (L=2048). This means 80% of attention FLOPs use the local window.
+S=256 beats both S=64 and S=1024. The model architecture uses an SSSSL repeating pattern: four sliding-window attention layers (S=256) followed by one full-context layer (full sequence length). This means 80% of attention FLOPs use the local window.
 
-S=64 is too narrow — it misses intra-sentence and intra-paragraph structure that appears within 64–256 tokens. S=1024 provides more context but the model cannot use it at this depth/token budget: with 524M training tokens, each attention position doesn't receive enough gradient signal to learn discriminative patterns at distances >256. Wider windows add parameters (in attention KV cache) and compute without adding usable information.
+S=64 is too narrow — it misses intra-sentence and intra-paragraph structure that appears within 64–256 tokens. S=1024 provides more context but the model cannot use it productively at this token budget.
 
 ### MLP_DIM = 2048 (4× ratio)
 
@@ -292,7 +292,7 @@ Deeper models typically benefit from smaller init to prevent gradient amplificat
 
 ### RoPE base = 200,000
 
-Karpathy's original uses 10,000. We use 200,000 for better extrapolation to longer sequences. At S=256 local windows and L=2048 full context, the practical impact on this run is small, but it costs nothing and avoids position encoding degradation if sequences near the context limit appear in training data.
+Karpathy's original uses 10,000. We use 200,000 for better extrapolation to longer sequences. At Phase 2's T=32768 context, this is essential — standard RoPE base=10K would degrade at positions beyond ~4K. The higher base spreads the frequency spectrum across the full context window.
 
 ### Muon momentum warmup 0.85 → 0.95 over 200 steps
 
@@ -344,7 +344,7 @@ Same as above except: d_model=512, 4 heads, MLP=2048, seq_len=2048, full-attenti
 
 **Data:** `karpathy/climbmix-400b-shuffle`, streamed from HuggingFace parquets
 **Tokenizer:** custom BPE, vocab=8192
-**Steps:** 1000, seed=42
+**Steps:** 1000 (sweep/ablation), 8200 (full epoch), seed=42
 **Batch:** 524,288 tokens/step (via gradient accumulation — B×T×accum_steps = 524,288)
 
 | Config | Batch size | Context | Grad accum | Tokens/step | MFU |
@@ -417,17 +417,9 @@ python3 feeder.py --stream --prefetch 4 2>/root/feeder.log \
 
 
 
-## Neuron Rinsing (dynamic-layer-importance branch)
+## Neuron Rinsing (negative result)
 
-A dynamic layer importance system that tracks per-layer gradient and activation norms, suppresses low-signal layers in real time, and periodically reinitializes dead layers.
-
-**Scoring:** at each log step, EMA(act_norm × grad_norm × gen_ratio) is computed per layer, where gen_ratio = clamp(val_grad / train_grad, 0.1, 10.0). This folds in a generalization signal — layers that produce large training gradients but small validation gradients are identified as memorizers and their influence is reduced before they flatline. The per-layer EMA score is normalized to mean=1.0 and written as a multiplicative scale on the MLP output residual.
-
-**Rinsing:** every 200 steps during the stable phase (blocked after cooldown_start), layers with score < 50% of mean have their MLP weights re-randomized and Muon momentum zeroed. A post-reinit gradient boost decays 2× → 1× over 50 steps to compensate for fresh weights having weaker initial gradients.
-
-**Implementation:** `layer_stat.cu` (L2 norm + scale kernels), `buffer.rs` (4 new GPU buffers), `forward.rs` + `backward.rs` (norm capture), `train.rs` (EMA update, reinit logic, val gradient capture).
-
-**Result:** No impact. Zero reinit events at all thresholds (0%, 2%, 5%, 10%). Muon prevents neuron death entirely. Rinsing is disabled.
+Implemented dynamic layer reinit (EMA-scored dead neuron detection, generalization-aware scoring, MLP weight reinit with gradient boost). Tested at 0%, 2%, 5%, 10% thresholds. Zero reinit events fired — Muon's Newton-Schulz orthogonalization prevents neuron death entirely. Code is on the `dynamic-layer-importance` branch, disabled on master.
 
 ---
 
@@ -537,36 +529,10 @@ FLASH_ATTN_V3_BUILD_DIR=fa3/build cargo build --release
 
 ### Pulling results back to local
 
-After a run finishes:
+After a run finishes, pull the train log and optionally the checkpoint:
 ```bash
-# Convert log to JSON (on the instance)
-python3 /tmp/log2json.py /tmp/train_<name>.log /tmp/<name>.json
-
-# Pull to local
-scp -P <port> root@<host>:/tmp/<name>.json results/
-
-# Or pull the full log
-scp -P <port> root@<host>:/tmp/train_<name>.log results/runs/
-```
-
-If multiple instances finished simultaneously, pull in parallel:
-```bash
-scp -P <port1> root@<host1>:/tmp/val_lr042.json results/ &
-scp -P <port2> root@<host2>:/tmp/val_lr038.json results/ &
-wait
-```
-
-### Binary versioning
-
-Each experiment variant gets a named binary on the run instance:
-- `/root/autoresearch-engine` — current master branch build
-- `/root/autoresearch-engine-d30clean` — d30, no neuron rinsing (LR sweep baseline)
-- `/root/autoresearch-engine-neuronrinse` — dynamic-layer-importance branch
-
-When updating the binary, old processes may hold the file open. Remove before overwriting:
-```bash
-ssh -p <port> root@<host> 'rm -f /root/autoresearch-engine-neuronrinse'
-scp -P <port> /tmp/autoresearch-engine-neuronrinse root@<host>:/root/
+scp -P <port> root@<host>:/root/train.log results/<run_name>/
+scp -P <port> root@<host>:/root/.cache/autoresearch/checkpoints/model.safetensors results/<run_name>/
 ```
 
 ### GPU memory management
@@ -628,7 +594,7 @@ The engine's hand-written CUDA kernels and training loop have been audited for p
 - Block cap: `elementwise`, `rope`, `embedding`, `residual_scale` cap grid at 2048 blocks. H100 has 132 SMs; cap should be 65535.
 - AdamW: 3 separate kernels (bf16→f32, adamw update, f32→bf16). Fuse into one → 3× fewer launches per optimizer step.
 - `adamw.cu`: `sqrtf(v) + eps` division — replace with `rsqrtf(v + eps²)` multiply (5× faster arithmetic).
-- Embedding backward: `d_out` reads at stride-D=512 (zero coalescing). Transpose through shared memory → 2–3× bwd speedup.
+- Embedding backward: `d_out` reads at stride-D (zero coalescing). Transpose through shared memory → 2–3× bwd speedup.
 - Muon: every thread reads `v_norm_sq` from global. Load once per block in shared memory → 1000× fewer reads.
 
 **Medium (kernel fusion)**
@@ -649,37 +615,22 @@ These changes are purely mechanical (no model changes, no hyperparameter impact)
 
 
 
-## Future Work / In Progress
+## Data Sources
 
-### Full single-epoch run (in progress)
-
-The 428M model is currently training for 8200 steps (~4.3B tokens, ~10 tokens/param) with 30% cooldown on a single H100 SXM. This is the same architecture and hyperparameters as the 0.5392 run, just with 8× more data. Expected to improve substantially — moving from 1.2 to 10 tokens/param is the single largest lever remaining.
-
-### Cooldown sweep (in progress)
-
-10% and 20% cooldown ablations are running alongside the 30% baseline to determine whether even shorter cooldown helps in the undertrained regime. If the trend continues (70% → 30% was a 0.072 bpb win), 10% cooldown could push further.
-
-### Further scaling
-
-The pipeline supports arbitrary model sizes and context lengths — the binding constraint is VRAM (80GB per H100) and data volume. With a full epoch, the 428M model moves from severely undertrained to mildly undertrained. If val_bpb drops well below 0.5 at 10 tokens/param, scaling to 800M+ params on multi-GPU becomes the natural next step.
-
-### Incorporating additional data
-
-`feeder.py` supports local parquet files and JSONL in addition to the HuggingFace stream:
+The feeder supports multiple input formats:
 
 ```bash
-# Stream from a local directory of parquets
-python3 feeder.py --input /path/to/parquets/ | ./autoresearch-engine train --stream-input ...
+# Stream from HuggingFace (climbmix-400b-shuffle)
+python3 feeder.py --stream | ./autoresearch-brain train --stream-input ...
 
-# Stream from JSONL files (extracts "text" field or concatenates "messages" content)
-python3 feeder.py --jsonl data/*.jsonl | ./autoresearch-engine train --stream-input ...
+# Local parquet directory
+python3 feeder.py --input /path/to/parquets/ | ./autoresearch-brain train --stream-input ...
 
-# Chain sources: mix climbmix with your own data by concatenating feeders
-cat <(python3 feeder.py --stream) <(python3 feeder.py --jsonl custom.jsonl) \
-  | ./autoresearch-engine train --stream-input ...
+# JSONL files (extracts "text" field or concatenates "messages"/"turns" content)
+python3 feeder.py --jsonl data/*.jsonl | ./autoresearch-brain train --stream-input ...
 ```
 
-The engine is agnostic to data source — it reads the binary row protocol from stdin regardless of origin. Any text data tokenizable with the included BPE tokenizer can be mixed in without code changes.
+The engine is agnostic to data source — it reads the binary row protocol from stdin regardless of origin.
 
 ---
 

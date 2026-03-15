@@ -1602,6 +1602,432 @@ fn pipeline_optimizer_step(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Multi-process distributed pipeline-parallel training (NCCL)
+// ---------------------------------------------------------------------------
+
+/// Multi-process pipeline-parallel training via NCCL.
+///
+/// Each process runs on a single GPU (CUDA_VISIBLE_DEVICES restricts visibility
+/// to one device, so all code sees device 0). Env vars:
+///   PIPELINE_RANK       — this process's rank (0..world_size-1)
+///   PIPELINE_WORLD_SIZE — total number of processes / GPUs
+///   NCCL_UNIQUE_ID_FILE — path to shared file for NCCL bootstrap
+///
+/// Layer assignment: layers are split evenly across ranks, with remainder going
+/// to earlier ranks. Activations flow rank 0 -> N-1 (forward) and N-1 -> 0
+/// (backward) via NCCL send/recv.
+pub fn train_distributed(config: TrainConfig) -> Result<()> {
+    use crate::nccl::NcclPipeline;
+
+    let rank: i32 = std::env::var("PIPELINE_RANK")
+        .expect("PIPELINE_RANK not set")
+        .parse()
+        .expect("PIPELINE_RANK must be an integer");
+    let world_size: i32 = std::env::var("PIPELINE_WORLD_SIZE")
+        .expect("PIPELINE_WORLD_SIZE not set")
+        .parse()
+        .expect("PIPELINE_WORLD_SIZE must be an integer");
+    let nccl_id_file = std::env::var("NCCL_UNIQUE_ID_FILE")
+        .expect("NCCL_UNIQUE_ID_FILE not set");
+
+    ensure!(rank >= 0 && rank < world_size, "PIPELINE_RANK {rank} out of range [0, {world_size})");
+    ensure!(world_size >= 2, "PIPELINE_WORLD_SIZE must be >= 2 for distributed training");
+    ensure!(N_LAYER >= world_size as usize, "N_LAYER ({N_LAYER}) must be >= world_size ({world_size})");
+
+    let ws = world_size as usize;
+    let rk = rank as usize;
+
+    // 1. Initialize CUDA (device 0 — CUDA_VISIBLE_DEVICES restricts to 1 GPU)
+    let ctx = CudaContext::new(0)?;
+    let stream = ctx.new_stream()?;
+    ctx.bind_to_thread()?;
+    unsafe { crate::ffi::cuda_runtime_init(0); }
+
+    // 2. Initialize NCCL communicator
+    let nccl = NcclPipeline::new(rank, world_size, Path::new(&nccl_id_file));
+    eprintln!("[rank {rank}/{world_size}] NCCL communicator initialized");
+
+    // 3. Compute layer range for this rank
+    let base = N_LAYER / ws;
+    let remainder = N_LAYER % ws;
+    let layer_start = rk * base + rk.min(remainder);
+    let layer_end = layer_start + base + if rk < remainder { 1 } else { 0 };
+    let has_embedding = rank == 0;
+    let has_head = rank == world_size - 1;
+
+    eprintln!("[rank {rank}] layers {layer_start}..{layer_end} (embed={has_embedding}, head={has_head})");
+
+    // 4. Create BufferManager for this rank's layers
+    let mut bufs = BufferManager::new_staged(
+        stream.clone(),
+        config.device_batch_size,
+        layer_start,
+        layer_end,
+        has_embedding,
+        has_head,
+    )?;
+    let gemm = GemmRunner::new(stream.clone());
+
+    let total_mb = bufs.total_bytes() as f64 / (1024.0 * 1024.0);
+    eprintln!("[rank {rank}] Allocated {total_mb:.1} MB GPU memory (B={})", config.device_batch_size);
+
+    // 5. Initialize weights (only for owned layers)
+    if let Some(ref ckpt_path) = config.load_checkpoint {
+        load_checkpoint_staged(&stream, &mut bufs, ckpt_path)?;
+    } else if let Ok(init_path) = std::env::var("INIT_WEIGHTS_PATH") {
+        crate::init_weights::load_weights_from_safetensors(&init_path, &mut bufs, &stream)?;
+    } else {
+        init_weights_staged(&stream, &mut bufs)?;
+    }
+    bufs.pack_wqkv();
+    init_f32_masters(&mut bufs)?;
+    precompute_rope(&stream, &mut bufs)?;
+
+    // 6. Calculate grad accumulation steps
+    let tokens_per_micro = config.device_batch_size * SEQ;
+    let grad_accum_steps = config.total_batch_size / tokens_per_micro;
+    let total_batch_size = grad_accum_steps * tokens_per_micro;
+    if rank == 0 {
+        println!("Distributed pipeline: {world_size} ranks, {N_LAYER} layers");
+        println!("Batch: device={}, total={total_batch_size} ({grad_accum_steps} accum steps)", config.device_batch_size);
+    }
+
+    // 7. Data source (rank 0 reads from stdin, other ranks don't load data)
+    let mut stdin_loader: Option<StdinDataLoader> = None;
+    let mut synth_loader: Option<SyntheticDataLoader> = None;
+    let mut shard_loader: Option<ShardDataLoader> = None;
+    if has_embedding {
+        if config.synthetic_data {
+            synth_loader = Some(SyntheticDataLoader::new(config.device_batch_size));
+        } else if config.stream_input {
+            stdin_loader = Some(StdinDataLoader::new(config.device_batch_size));
+        } else {
+            ensure!(!config.data_dir.is_empty(), "data_dir must be set");
+            let data_path = Path::new(&config.data_dir);
+            shard_loader = Some(ShardDataLoader::new_train(data_path, config.device_batch_size, config.num_train_shards)?);
+        }
+    }
+
+    let bt = config.device_batch_size * SEQ;
+    let n_act = bt * D_MODEL; // bf16 elements for x, x0 transfers
+    let n_btd = (bt * D_MODEL) as i32;
+    let cu_stream = stream.cu_stream() as crate::nccl::CUstream;
+
+    // Pinned host buffers for async H2D (rank 0 only, but allocating on all is cheap)
+    let mut pinned_inp = PinnedHostBuffer::new(bt)?;
+    let mut pinned_tgt = PinnedHostBuffer::new(bt)?;
+
+    macro_rules! load_batch {
+        ($inp:expr, $tgt:expr $(,)?) => {
+            if let Some(ref mut sl) = synth_loader {
+                sl.next_batch_into($inp, $tgt);
+            } else if let Some(ref mut sl) = stdin_loader {
+                sl.next_batch_into($inp, $tgt);
+            } else {
+                shard_loader.as_mut().unwrap().next_batch_into($inp, $tgt);
+            }
+        };
+    }
+
+    let num_flops_per_token = estimate_flops_per_token();
+    let device_peak_flops: f64 = ws as f64 * 990.0e12;
+
+    // 8. Warmup step
+    if rank == 0 { eprintln!("Running warmup step..."); }
+    {
+        bufs.zero_gradients()?;
+        stream.memset_zeros(&mut bufs.loss)?;
+
+        if has_embedding {
+            load_batch!(pinned_inp.as_mut_slice(), pinned_tgt.as_mut_slice());
+            memcpy_htod_async(&pinned_inp, &mut bufs.input_ids, &stream);
+            memcpy_htod_async(&pinned_tgt, &mut bufs.targets, &stream);
+        }
+
+        // Forward
+        if !has_embedding {
+            // Recv x and x0 from rank-1
+            nccl.group_start();
+            nccl.recv_bf16(bufs.x_device_ptr_mut() as *mut std::ffi::c_void, n_act, rank - 1, cu_stream);
+            nccl.recv_bf16(bufs.x0_device_ptr_mut() as *mut std::ffi::c_void, n_act, rank - 1, cu_stream);
+            nccl.group_end();
+        }
+        crate::forward::forward_staged(&mut bufs, &gemm);
+        if !has_head {
+            // Send x and x0 to rank+1
+            nccl.group_start();
+            nccl.send_bf16(bufs.x_device_ptr() as *const std::ffi::c_void, n_act, rank + 1, cu_stream);
+            nccl.send_bf16(bufs.x0_device_ptr() as *const std::ffi::c_void, n_act, rank + 1, cu_stream);
+            nccl.group_end();
+        }
+
+        // Targets: rank 0 sends directly to last rank for CE loss.
+        // u32 is 4 bytes, bf16 is 2 bytes, so send bt*2 bf16 elements = bt*4 bytes = bt u32 values.
+        if has_embedding && !has_head {
+            nccl.send_bf16(bufs.targets_device_ptr() as *const std::ffi::c_void, bt * 2, world_size - 1, cu_stream);
+        }
+        if has_head && !has_embedding {
+            nccl.recv_bf16(bufs.targets_device_ptr() as *mut std::ffi::c_void, bt * 2, 0, cu_stream);
+        }
+
+        // Backward
+        if has_head {
+            // Last rank starts backward — d_x comes from CE loss, no recv needed
+            crate::backward::backward_staged_ex(&mut bufs, &gemm, grad_accum_steps, false);
+        } else if has_embedding {
+            // Recv d_x from rank+1, then backward (skip embedding bwd for now)
+            nccl.recv_bf16(bufs.dx_device_ptr_mut() as *mut std::ffi::c_void, n_act, rank + 1, cu_stream);
+            crate::backward::backward_staged_ex(&mut bufs, &gemm, grad_accum_steps, true);
+            crate::backward::embedding_backward(&mut bufs);
+        } else {
+            // Middle rank: recv d_x from rank+1, backward, send d_x to rank-1
+            nccl.recv_bf16(bufs.dx_device_ptr_mut() as *mut std::ffi::c_void, n_act, rank + 1, cu_stream);
+            crate::backward::backward_staged_ex(&mut bufs, &gemm, grad_accum_steps, false);
+            nccl.send_bf16(bufs.dx_device_ptr() as *const std::ffi::c_void, n_act, rank - 1, cu_stream);
+        }
+
+        // Send d_x backward if last rank
+        if has_head && world_size > 1 {
+            nccl.send_bf16(bufs.dx_device_ptr() as *const std::ffi::c_void, n_act, rank - 1, cu_stream);
+        }
+
+        let progress = wsd_progress(0, None, config.cooldown_steps, config.schedule_cfg.warmdown_ratio);
+        crate::optim::optimizer_step(&mut bufs, &gemm, 1, progress, &config.schedule_cfg);
+        bufs.pack_wqkv();
+        stream.synchronize()?;
+    }
+    if rank == 0 { eprintln!("Warmup complete."); }
+
+    // 9. Training loop
+    let t_start = Instant::now();
+    let mut step: usize = 0;
+    let mut total_training_time: f64 = 0.0;
+    let mut smooth_loss: f64 = 0.0;
+    let ema_beta: f64 = 0.9;
+
+    const TIMING_WARMUP_STEPS: usize = 10;
+
+    let mut cooldown_start: Option<usize> = config.max_steps.map(|max| {
+        max.saturating_sub(config.cooldown_steps)
+    });
+    let trigger_path = std::path::Path::new("/tmp/autoresearch_cooldown");
+    let mut last_dt: f64 = 0.0;
+
+    loop {
+        let step_start = Instant::now();
+
+        // File-based cooldown trigger (rank 0 checks, but all ranks need to stop together)
+        if rank == 0 {
+            if cooldown_start.is_none() && trigger_path.exists() {
+                eprintln!("[schedule] cooldown triggered via file at step {step}");
+                cooldown_start = Some(step);
+                let _ = std::fs::remove_file(trigger_path);
+            }
+        }
+
+        // Stop when cooldown complete
+        if let Some(cs) = cooldown_start {
+            if step >= cs + config.cooldown_steps {
+                break;
+            }
+        }
+
+        // Zero gradients + loss
+        bufs.zero_gradients()?;
+        if has_head {
+            stream.memset_zeros(&mut bufs.loss)?;
+        }
+
+        // ── Gradient accumulation micro-steps ──
+        for _micro in 0..grad_accum_steps {
+            // Load data on rank 0
+            if has_embedding {
+                load_batch!(pinned_inp.as_mut_slice(), pinned_tgt.as_mut_slice());
+                memcpy_htod_async(&pinned_inp, &mut bufs.input_ids, &stream);
+                memcpy_htod_async(&pinned_tgt, &mut bufs.targets, &stream);
+            }
+
+            // ── Forward pass ──
+            // Recv activations from previous rank
+            if !has_embedding {
+                nccl.group_start();
+                nccl.recv_bf16(bufs.x_device_ptr_mut() as *mut std::ffi::c_void, n_act, rank - 1, cu_stream);
+                nccl.recv_bf16(bufs.x0_device_ptr_mut() as *mut std::ffi::c_void, n_act, rank - 1, cu_stream);
+                nccl.group_end();
+            }
+
+            crate::forward::forward_staged(&mut bufs, &gemm);
+
+            // Send activations to next rank
+            if !has_head {
+                nccl.group_start();
+                nccl.send_bf16(bufs.x_device_ptr() as *const std::ffi::c_void, n_act, rank + 1, cu_stream);
+                nccl.send_bf16(bufs.x0_device_ptr() as *const std::ffi::c_void, n_act, rank + 1, cu_stream);
+                nccl.group_end();
+            }
+
+            // Send targets from rank 0 directly to last rank for CE loss
+            // (For intermediate ranks in > 2 GPU setups, rank 0 sends to last rank via NCCL
+            //  which handles routing transparently.)
+            if has_embedding && !has_head {
+                // Targets are u32 (4 bytes each). NCCL bf16 is 2 bytes each.
+                // Send bt*2 bf16 elements = bt*4 bytes = bt u32 values.
+                nccl.send_bf16(bufs.targets_device_ptr() as *const std::ffi::c_void, bt * 2, world_size - 1, cu_stream);
+            }
+            if has_head && !has_embedding {
+                nccl.recv_bf16(bufs.targets_device_ptr() as *mut std::ffi::c_void, bt * 2, 0, cu_stream);
+            }
+
+            // ── Backward pass ──
+            // Last rank: backward starts from CE loss (d_x is set by backward_staged_ex)
+            // Middle/first rank: recv d_x from rank+1 before backward
+            if !has_head {
+                nccl.recv_bf16(bufs.dx_device_ptr_mut() as *mut std::ffi::c_void, n_act, rank + 1, cu_stream);
+            }
+
+            let skip_emb = has_embedding && world_size > 1;
+            crate::backward::backward_staged_ex(&mut bufs, &gemm, grad_accum_steps, skip_emb);
+
+            // Send d_x to previous rank (all ranks except rank 0)
+            if !has_embedding {
+                nccl.send_bf16(bufs.dx_device_ptr() as *const std::ffi::c_void, n_act, rank - 1, cu_stream);
+            }
+
+            // d_x0 accumulation: for correctness, rank 0 needs the sum of d_x0 from all ranks.
+            // Each rank sends its d_x0 to rank 0, which accumulates them.
+            if !has_embedding {
+                nccl.send_bf16(
+                    {
+                        let (ptr, _) = bufs.d_x0.device_ptr(bufs.d_x0.stream());
+                        ptr as *const std::ffi::c_void
+                    },
+                    n_act, 0, cu_stream,
+                );
+            }
+            if has_embedding {
+                // Receive and accumulate d_x0 from each remote rank
+                for src in 1..world_size {
+                    nccl.recv_bf16(
+                        {
+                            let (ptr, _) = bufs.d_xn.device_ptr(bufs.d_xn.stream());
+                            ptr as *mut std::ffi::c_void
+                        },
+                        n_act, src, cu_stream,
+                    );
+                    // d_x0 += d_xn
+                    unsafe {
+                        crate::ffi::residual_add(
+                            {
+                                let (ptr, _) = bufs.d_x0.device_ptr(bufs.d_x0.stream());
+                                ptr as *mut std::ffi::c_void
+                            },
+                            {
+                                let (ptr, _) = bufs.d_xn.device_ptr(bufs.d_xn.stream());
+                                ptr as *const std::ffi::c_void
+                            },
+                            n_btd,
+                            cu_stream as crate::ffi::CudaStream,
+                        );
+                    }
+                }
+                // Now run embedding backward with complete d_x0
+                crate::backward::embedding_backward(&mut bufs);
+            }
+        }
+
+        // ── Optimizer step (each rank updates its own weights) ──
+        let progress = wsd_progress(step, cooldown_start, config.cooldown_steps, config.schedule_cfg.warmdown_ratio);
+        crate::optim::optimizer_step(&mut bufs, &gemm, step + 1, progress, &config.schedule_cfg);
+        bufs.pack_wqkv();
+
+        // ── Logging (last rank logs loss) ──
+        let needs_log = step % LOG_INTERVAL == 0 || step <= TIMING_WARMUP_STEPS;
+
+        if needs_log {
+            stream.synchronize()?;
+            let dt = step_start.elapsed().as_secs_f64();
+            last_dt = dt;
+
+            if step > TIMING_WARMUP_STEPS {
+                total_training_time += dt;
+            }
+
+            if has_head {
+                let train_loss = read_mean_loss(&stream, &bufs, config.device_batch_size * SEQ * grad_accum_steps);
+                if !train_loss.is_nan() {
+                    smooth_loss = ema_beta * smooth_loss + (1.0 - ema_beta) * train_loss;
+                }
+                let debiased_loss = if smooth_loss == 0.0 {
+                    f64::NAN
+                } else {
+                    smooth_loss / (1.0 - ema_beta.powi((step + 1) as i32))
+                };
+
+                let tok_per_sec = total_batch_size as f64 / dt;
+                let mfu = 100.0 * num_flops_per_token as f64 * total_batch_size as f64 / dt / device_peak_flops;
+                let remaining = match cooldown_start {
+                    Some(cs) => (cs + config.cooldown_steps).saturating_sub(step),
+                    None => config.max_steps.map_or(usize::MAX, |max| max.saturating_sub(step)),
+                };
+                let lr_mult = crate::optim::lr_multiplier(progress, &config.schedule_cfg);
+
+                println!(
+                    "step {step:>5} | loss {debiased_loss:.4} | lr {lr_mult:.3} | dt {dt:.3}s | \
+                     tok/s {tok_per_sec:.0} | mfu {mfu:.1}% | {ws}xGPU(nccl) | steps_left {remaining}",
+                );
+                let _ = std::io::stdout().flush();
+            }
+        } else {
+            if step > TIMING_WARMUP_STEPS {
+                total_training_time += last_dt;
+            }
+        }
+
+        step += 1;
+    }
+
+    // ── Final ──
+    stream.synchronize()?;
+
+    if has_head {
+        println!("Training complete after {step} steps ({ws}-GPU distributed pipeline).");
+    }
+
+    // Save per-rank checkpoint
+    if !config.checkpoint_dir.is_empty() {
+        let dir = Path::new(&config.checkpoint_dir).join(format!("rank_{rank}"));
+        fs::create_dir_all(&dir)?;
+        save_checkpoint(&stream, &bufs, step, true, dir.to_str().unwrap())?;
+    }
+
+    if rank == 0 {
+        let total_elapsed = t_start.elapsed().as_secs_f64();
+        let total_tokens = step * total_batch_size;
+        let steady_mfu = if total_training_time > 0.0 {
+            100.0
+                * num_flops_per_token as f64
+                * total_batch_size as f64
+                * step.saturating_sub(TIMING_WARMUP_STEPS + 1) as f64
+                / total_training_time
+                / device_peak_flops
+        } else {
+            0.0
+        };
+
+        println!("---");
+        println!("training_seconds: {total_training_time:.1}");
+        println!("total_seconds:    {total_elapsed:.1}");
+        println!("mfu_percent:      {steady_mfu:.2}");
+        println!("total_tokens_M:   {:.1}", total_tokens as f64 / 1e6);
+        println!("num_steps:        {step}");
+        println!("num_params_M:     {:.1}", num_params() as f64 / 1e6);
+        println!("pipeline_ranks:   {ws}");
+    }
+
+    Ok(())
+}
+
 /// Initialize weights for a staged buffer manager (only initializes owned layers).
 fn init_weights_staged(stream: &Arc<CudaStream>, bufs: &mut BufferManager) -> Result<()> {
     let d = D_MODEL;

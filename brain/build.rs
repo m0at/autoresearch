@@ -26,9 +26,13 @@ fn main() {
         "moe_dispatch",
         "moe_backward",
         "moe_aux_loss",
-        "nccl_helper",
     ] {
         build.file(format!("kernels/{kernel}.cu"));
+    }
+
+    // NCCL helper (only if NCCL is installed)
+    if std::path::Path::new("/usr/include/nccl.h").exists() {
+        build.file("kernels/nccl_helper.cu");
     }
 
     build.compile("engine_kernels");
@@ -61,6 +65,9 @@ fn main() {
     // Driver API (cuMemsetD8Async, cuMemcpyDtoH, etc.) used in CUDA kernels
     println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");
     println!("cargo:rustc-link-lib=dylib=cuda");
-    // NCCL for pipeline parallelism
-    println!("cargo:rustc-link-lib=nccl");
+    // NCCL for pipeline parallelism (optional — only needed on multi-GPU)
+    if std::path::Path::new("/usr/lib/x86_64-linux-gnu/libnccl.so").exists()
+        || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libnccl.so.2").exists() {
+        println!("cargo:rustc-link-lib=nccl");
+    }
 }

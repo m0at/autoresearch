@@ -55,6 +55,8 @@ fn main() -> Result<()> {
         .ok().and_then(|s| s.parse().ok()).unwrap_or(default_sched.peak_lr);
     let warmdown_ratio: f64 = std::env::var("WARMDOWN_RATIO")
         .ok().and_then(|s| s.parse().ok()).unwrap_or(default_sched.warmdown_ratio);
+    let warmup_ratio: f64 = std::env::var("WARMUP_RATIO")
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
     let weight_decay: f64 = std::env::var("WEIGHT_DECAY")
         .ok().and_then(|s| s.parse().ok()).unwrap_or(default_sched.weight_decay);
     let schedule: Schedule = std::env::var("SCHEDULE")
@@ -66,6 +68,7 @@ fn main() -> Result<()> {
     let lr_scale = peak_lr / default_sched.peak_lr;
     let schedule_cfg = ScheduleConfig {
         peak_lr,
+        warmup_ratio,
         warmdown_ratio,
         weight_decay,
         schedule,

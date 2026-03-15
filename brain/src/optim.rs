@@ -73,6 +73,7 @@ impl std::fmt::Display for Schedule {
 #[derive(Debug, Clone)]
 pub struct ScheduleConfig {
     pub peak_lr: f64,         // MATRIX_LR for Muon
+    pub warmup_ratio: f64,
     pub warmdown_ratio: f64,
     pub weight_decay: f64,
     pub schedule: Schedule,
@@ -87,6 +88,7 @@ impl Default for ScheduleConfig {
     fn default() -> Self {
         Self {
             peak_lr: DEFAULT_MATRIX_LR,
+            warmup_ratio: DEFAULT_WARMUP_RATIO,
             warmdown_ratio: DEFAULT_WARMDOWN_RATIO,
             weight_decay: DEFAULT_WEIGHT_DECAY,
             schedule: Schedule::Linear,
@@ -139,7 +141,7 @@ fn dmodel_lr_scale() -> f32 {
 }
 
 fn get_lr_multiplier(progress: f64, cfg: &ScheduleConfig) -> f64 {
-    let warmup = DEFAULT_WARMUP_RATIO;
+    let warmup = cfg.warmup_ratio;
     let warmdown = cfg.warmdown_ratio;
     let final_frac = cfg.final_lr_frac;
 

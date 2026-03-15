@@ -1,6 +1,7 @@
 pub mod backward;
 pub mod buffer;
 pub mod config;
+pub mod cuda_ipc;
 pub mod feeder;
 pub mod ffi;
 pub mod forward;

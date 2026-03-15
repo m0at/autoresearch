@@ -1,6 +1,20 @@
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+#include <cuda.h>
 #include <math.h>
+
+// ─── Static driver-API scratch buffers (pool-allocated can't be zeroed) ──────
+// Per-GPU arrays to avoid cross-device illegal address on multi-GPU
+#define MAX_GPUS 8
+static float* s_frob_scratch[MAX_GPUS] = {};
+static float* s_normuon_scratch[MAX_GPUS] = {};
+static int    s_normuon_scratch_cap[MAX_GPUS] = {};
+
+// ── Zero kernel (replaces cuMemsetD8Async which fails on pool alloc) ────────
+__global__ void muon_zero_f32(float* data, int n) {
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i < n) data[i] = 0.0f;
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -144,14 +158,22 @@ __global__ void frob_scale_kernel(
 
 extern "C" void frob_normalize_bf16(const void* x, void* out, int N, float* scratch,
     cudaStream_t stream) {
+    int dev; cudaGetDevice(&dev);
+
+    // Use static driver-API buffer (pool-allocated scratch can't be zeroed)
+    if (!s_frob_scratch[dev]) {
+        CUdeviceptr tmp;
+        cuMemAlloc(&tmp, sizeof(float));
+        s_frob_scratch[dev] = (float*)tmp;
+    }
+
     int threads = 256;
     int blocks = (N + threads - 1) / threads;
-    // scratch must point to at least 1 float of device memory
-    cudaMemsetAsync(scratch, 0, sizeof(float), stream);
+    muon_zero_f32<<<1, 1, 0, stream>>>(s_frob_scratch[dev], 1);
     frob_sum_sq_kernel<<<blocks, threads, 0, stream>>>(
-        (const __nv_bfloat16*)x, scratch, N);
+        (const __nv_bfloat16*)x, s_frob_scratch[dev], N);
     frob_scale_kernel<<<blocks, threads, 0, stream>>>(
-        (const __nv_bfloat16*)x, (__nv_bfloat16*)out, scratch, N);
+        (const __nv_bfloat16*)x, (__nv_bfloat16*)out, s_frob_scratch[dev], N);
 }
 
 // ── Weight update with cautious decay ──────────────────────────────────────────
@@ -293,12 +315,25 @@ extern "C" void normuon_step_bf16(
 ) {
     int red_dim = reduce_cols ? n : m;
     int num_groups = reduce_cols ? m : n;
+    int needed = num_groups + 2;  // v_mean + v_norm_sq + v_norm_new_sq
+
+    int dev; cudaGetDevice(&dev);
+
+    // Use static driver-API buffer (pool-allocated scratch can't be zeroed)
+    if (needed > s_normuon_scratch_cap[dev]) {
+        if (s_normuon_scratch[dev]) cuMemFree((CUdeviceptr)s_normuon_scratch[dev]);
+        CUdeviceptr tmp;
+        cuMemAlloc(&tmp, needed * sizeof(float));
+        s_normuon_scratch[dev] = (float*)tmp;
+        s_normuon_scratch_cap[dev] = needed;
+    }
 
     // scratch layout: [v_mean (num_groups floats)] [v_norm_sq (1 float)] [v_norm_new_sq (1 float)]
-    float* d_v_mean = scratch;
-    float* d_v_norm_sq = scratch + num_groups;
-    float* d_v_norm_new_sq = scratch + num_groups + 1;
-    cudaMemsetAsync(d_v_mean, 0, (num_groups + 2) * sizeof(float), stream);
+    float* d_v_mean = s_normuon_scratch[dev];
+    float* d_v_norm_sq = s_normuon_scratch[dev] + num_groups;
+    float* d_v_norm_new_sq = s_normuon_scratch[dev] + num_groups + 1;
+    int zero_blocks = (needed + 255) / 256;
+    muon_zero_f32<<<zero_blocks, min(needed, 256), 0, stream>>>(s_normuon_scratch[dev], needed);
 
     // Kernel 1: row variance
     int k1_threads = 256;
@@ -377,4 +412,22 @@ extern "C" void ns_combined_batched(
     ns_combined_batched_kernel<<<blocks, threads, 0, stream>>>(
         (const __nv_bfloat16*)A, (const __nv_bfloat16*)A2,
         (__nv_bfloat16*)out, ca, cb, cc, d, batch);
+}
+
+extern "C" void muon_init() {
+    int dev; cudaGetDevice(&dev);
+    CUdeviceptr dummy;
+    cuMemAlloc(&dummy, 256);
+    muon_nesterov_kernel<<<1, 1, 0, 0>>>(
+        (__nv_bfloat16*)dummy, (const __nv_bfloat16*)dummy,
+        (__nv_bfloat16*)dummy, 0.9f, 0);
+    cudaDeviceSynchronize();
+    cuMemFree(dummy);
+
+    // Pre-allocate per-GPU frob scratch
+    if (!s_frob_scratch[dev]) {
+        CUdeviceptr tmp;
+        cuMemAlloc(&tmp, sizeof(float));
+        s_frob_scratch[dev] = (float*)tmp;
+    }
 }

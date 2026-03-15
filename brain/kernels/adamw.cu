@@ -1,3 +1,4 @@
+#include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -103,4 +104,15 @@ extern "C" void adamw_step_f32(
         params, grads, exp_avg, exp_avg_sq,
         lr, beta1, beta2, eps, wd,
         bias_correction1, bias_correction2, N);
+}
+
+extern "C" void adamw_init() {
+    CUdeviceptr dummy;
+    cuMemAlloc(&dummy, 256);
+    adamw_step_bf16_kernel<<<1, 1, 0, 0>>>(
+        (__nv_bfloat16*)dummy, (const __nv_bfloat16*)dummy,
+        (__nv_bfloat16*)dummy, (__nv_bfloat16*)dummy,
+        0.001f, 0.9f, 0.999f, 1e-8f, 0.0f, 1.0f, 1.0f, 0);
+    cudaDeviceSynchronize();
+    cuMemFree(dummy);
 }

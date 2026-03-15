@@ -1,3 +1,4 @@
+#include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -85,4 +86,13 @@ extern "C" void softcap_bwd(
     softcap_bwd_kernel<<<blocks, threads, 0, stream>>>(
         (const __nv_bfloat16*)x, (const __nv_bfloat16*)grad,
         (__nv_bfloat16*)dx, cap, N);
+}
+
+extern "C" void softcap_init() {
+    CUdeviceptr dummy;
+    cuMemAlloc(&dummy, 256);
+    softcap_fwd_kernel<<<1, 1, 0, 0>>>(
+        (const __nv_bfloat16*)dummy, (__nv_bfloat16*)dummy, 1.0f, 0);
+    cudaDeviceSynchronize();
+    cuMemFree(dummy);
 }

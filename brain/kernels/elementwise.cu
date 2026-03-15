@@ -1,7 +1,7 @@
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+#include <cuda.h>
 #include <stdint.h>
-
 // ============================================================================
 // Vectorized elementwise kernels — 128-bit (uint4) loads/stores
 // Each uint4 holds 8 bf16 values (16 bytes). 256 threads, grid-stride, max 2048 blocks.
@@ -292,4 +292,22 @@ extern "C" void add_slice_cols(
             (__nv_bfloat16*)dst, (const __nv_bfloat16*)src,
             rows, dst_cols, src_cols);
     }
+}
+
+// Initialize CUDA runtime for the current device.
+// Must be called once before any <<<>>> kernel launch when using the driver API
+// (cudarc) alongside runtime API kernels.
+extern "C" void cuda_runtime_init(int device) {
+    cudaSetDevice(device);
+    // Launch a dummy kernel to force kernel module registration on this device
+    CUdeviceptr d_test;
+    cuMemAlloc(&d_test, 256);
+    residual_add_kernel<<<1, 1, 0, 0>>>((nv_bfloat16*)d_test, (nv_bfloat16*)d_test, 1);
+    cudaDeviceSynchronize();
+    cuMemFree(d_test);
+}
+
+// Lightweight: just switch runtime device without sync
+extern "C" void cuda_set_device(int device) {
+    cudaSetDevice(device);
 }

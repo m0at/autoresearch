@@ -1,3 +1,4 @@
+#include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -185,4 +186,15 @@ extern "C" void residual_scale_bwd(
         (const __nv_bfloat16*)lambda_r_ptr, (const __nv_bfloat16*)lambda_0_ptr,
         (__nv_bfloat16*)d_x, (__nv_bfloat16*)d_x0,
         d_lambda_r, d_lambda_0, N);
+}
+
+extern "C" void residual_scale_init() {
+    CUdeviceptr dummy;
+    cuMemAlloc(&dummy, 256);
+    residual_scale_fwd_kernel<<<1, 1, 0, 0>>>(
+        (const __nv_bfloat16*)dummy, (const __nv_bfloat16*)dummy,
+        (const __nv_bfloat16*)dummy, (const __nv_bfloat16*)dummy,
+        (__nv_bfloat16*)dummy, 0);
+    cudaDeviceSynchronize();
+    cuMemFree(dummy);
 }

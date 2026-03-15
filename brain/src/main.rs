@@ -1,7 +1,7 @@
 use anyhow::Result;
 use autoresearch_brain::config::SEQ;
 use autoresearch_brain::optim::{Schedule, ScheduleConfig};
-use autoresearch_brain::train::{train, TrainConfig};
+use autoresearch_brain::train::{train, train_distributed, train_pipeline, TrainConfig};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -11,9 +11,11 @@ fn main() -> Result<()> {
     let mut data_dir: Option<String> = None;
     let mut tokenizer_dir: Option<String> = None;
     let mut stream_input = false;
+    let mut distributed = false;
 
     let mut max_steps_cli: Option<usize> = None;
     let mut synthetic_cli = false;
+    let mut n_pipeline_stages: usize = 1;
 
     let mut i = 1;
     while i < args.len() {
@@ -23,8 +25,10 @@ fn main() -> Result<()> {
             "--data-dir" => { i += 1; data_dir = Some(args[i].clone()); }
             "--tokenizer-path" | "--tokenizer-dir" => { i += 1; tokenizer_dir = Some(args[i].clone()); }
             "--stream-input" => { stream_input = true; }
+            "--distributed" => { distributed = true; }
             "--max-steps" => { i += 1; max_steps_cli = Some(args[i].parse().expect("--max-steps expects a number")); }
             "--synthetic-data" => { i += 1; synthetic_cli = args[i] == "true" || args[i] == "1"; }
+            "--pipeline" => { i += 1; n_pipeline_stages = args[i].parse().expect("--pipeline expects a number"); }
             "train" => {} // legacy positional arg
             _ => {}
         }
@@ -37,9 +41,9 @@ fn main() -> Result<()> {
     let max_steps: Option<usize> = max_steps_cli.or_else(|| std::env::var("MAX_STEPS")
         .ok().and_then(|s| s.parse::<usize>().ok()).filter(|&n| n > 0));
     let cooldown_steps: usize = std::env::var("COOLDOWN_STEPS")
-        .ok().and_then(|s| s.parse().ok()).unwrap_or(300);
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(500);
     let batch_size: usize = std::env::var("BATCH_SIZE")
-        .ok().and_then(|s| s.parse().ok()).unwrap_or(4);
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(32);
     let num_train_shards: Option<usize> = std::env::var("NUM_TRAIN_SHARDS")
         .ok().and_then(|s| s.parse().ok());
     let total_batch: usize = std::env::var("TOTAL_BATCH")
@@ -90,6 +94,7 @@ fn main() -> Result<()> {
         stream_input,
         synthetic_data,
         schedule_cfg,
+        n_pipeline_stages,
     };
 
     println!("autoresearch-brain");
@@ -114,5 +119,20 @@ fn main() -> Result<()> {
         println!("  train/val split: {n} train shards, rest = val");
     }
 
-    train(config)
+    println!("  pipeline_stages: {}", config.n_pipeline_stages);
+    if distributed {
+        let rank: usize = std::env::var("PIPELINE_RANK")
+            .expect("PIPELINE_RANK must be set in --distributed mode")
+            .parse().expect("PIPELINE_RANK must be a number");
+        let world_size: usize = std::env::var("PIPELINE_WORLD_SIZE")
+            .expect("PIPELINE_WORLD_SIZE must be set in --distributed mode")
+            .parse().expect("PIPELINE_WORLD_SIZE must be a number");
+        println!("Launching distributed training (rank {rank}/{world_size})...");
+        train_distributed(config)
+    } else if config.n_pipeline_stages > 1 {
+        println!("Launching {}-GPU pipeline training...", config.n_pipeline_stages);
+        train_pipeline(config)
+    } else {
+        train(config)
+    }
 }

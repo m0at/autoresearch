@@ -163,8 +163,17 @@ fn estimate_flops_per_token() -> usize {
     let scalar_numel = n_layer * 2;
     let ve_gate_numel: usize = VE_LAYERS.len() * N_KV_HEAD * VE_GATE_CH;
 
-    // Block weights: per layer: 4*d*d (q,k,v,o) + 2*MLP_DIM*d (fc,dn)
-    let block_params = n_layer * (4 * d * d + 2 * MLP_DIM * d);
+    // Block weights: per layer: 4*d*d (q,k,v,o) + MLP (dense or MoE active params)
+    let mut block_params = 0;
+    for i in 0..n_layer {
+        block_params += 4 * d * d;
+        if is_moe_layer(i) {
+            // Active per token: router + TOP_K experts × 2 matrices
+            block_params += N_EXPERTS * d + TOP_K * 2 * MLP_DIM_E * d;
+        } else {
+            block_params += 2 * MLP_DIM * d;
+        }
+    }
     let total_params = wte_numel + lm_head_numel + ve_numel + scalar_numel + ve_gate_numel + block_params;
     let nparams_exclude = wte_numel + ve_numel + scalar_numel;
 
@@ -186,7 +195,17 @@ fn num_params() -> usize {
     let ve = VE_LAYERS.len() * VOCAB * d;
     let ve_gate = VE_LAYERS.len() * N_KV_HEAD * VE_GATE_CH;
     let scalars = N_LAYER * 2;
-    let block = N_LAYER * (4 * d * d + 2 * MLP_DIM * d);
+    let mut block = 0;
+    for i in 0..N_LAYER {
+        // Attention: q, k, v, o
+        block += 4 * d * d;
+        if is_moe_layer(i) {
+            // Router: [N_EXPERTS, D_MODEL] + N_EXPERTS experts × 2 matrices [MLP_DIM_E, D_MODEL]
+            block += N_EXPERTS * d + N_EXPERTS * 2 * MLP_DIM_E * d;
+        } else {
+            block += 2 * MLP_DIM * d;
+        }
+    }
     wte + lm_head + ve + ve_gate + scalars + block
 }
 
@@ -634,6 +653,7 @@ pub struct TrainConfig {
     /// Eliminates all I/O to isolate GPU compute time. Skips eval/checkpoint.
     pub synthetic_data: bool,
     pub schedule_cfg: crate::optim::ScheduleConfig,
+    pub n_pipeline_stages: usize,
 }
 
 impl Default for TrainConfig {
@@ -655,6 +675,7 @@ impl Default for TrainConfig {
             stream_input: false,
             synthetic_data: false,
             schedule_cfg: crate::optim::ScheduleConfig::default(),
+            n_pipeline_stages: 1,
         }
     }
 }
@@ -688,8 +709,10 @@ pub fn train(config: TrainConfig) -> Result<()> {
 
     // 1. Initialize CUDA
     let ctx = CudaContext::new(0)?;
-    // CUDA graph capture requires a non-default stream (stream 0 cannot be captured).
     let stream = ctx.new_stream()?;
+    // Init CUDA runtime AFTER driver context is set (so they share the primary context)
+    ctx.bind_to_thread()?;
+    unsafe { crate::ffi::cuda_runtime_init(0); }
 
     // 2. Create BufferManager (allocates all GPU memory)
     let mut bufs = BufferManager::new(stream.clone(), config.device_batch_size)?;
@@ -697,7 +720,7 @@ pub fn train(config: TrainConfig) -> Result<()> {
 
     let total_mb = bufs.total_bytes() as f64 / (1024.0 * 1024.0);
     println!("Allocated {total_mb:.1} MB GPU memory (B={})", config.device_batch_size);
-    println!("Model: {:.1}M params, depth={N_LAYER}, d_model={D_MODEL}", num_params() as f64 / 1e6);
+    println!("Model: {:.1}M total params ({:.1}M active), depth={N_LAYER}, d_model={D_MODEL}", num_params() as f64 / 1e6, estimate_flops_per_token() as f64 / 6.0 / 1e6);
 
     // 3. Initialize weights
     //    Priority: --load-checkpoint flag > INIT_WEIGHTS_PATH env var > random init
@@ -1157,6 +1180,597 @@ pub fn train(config: TrainConfig) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Pipeline-parallel training
+// ---------------------------------------------------------------------------
+
+/// Pipeline-parallel training across multiple GPUs.
+///
+/// Splits the model across `config.n_pipeline_stages` GPUs, each holding a
+/// contiguous chunk of transformer layers. Sequential pipeline (no micro-batch
+/// overlap): forward flows stage 0 -> N-1, backward flows N-1 -> 0.
+pub fn train_pipeline(config: TrainConfig) -> Result<()> {
+    use crate::pipeline::Pipeline;
+
+    let n_gpu = config.n_pipeline_stages;
+    let device_peak_flops: f64 = n_gpu as f64 * 990.0e12;
+
+    // 1. Create pipeline (allocates buffers on each GPU — this sets up cudarc contexts)
+    let mut pipeline = Pipeline::new(n_gpu, config.device_batch_size)?;
+
+    // Skip per-GPU kernel registration — CUDA runtime lazy-loads on each device
+    // The cudaSetDevice in forward_staged/backward_staged handles device switching
+
+    let total_mb: f64 = pipeline.stages.iter()
+        .map(|s| s.bufs.total_bytes() as f64)
+        .sum::<f64>() / (1024.0 * 1024.0);
+    println!("Allocated {total_mb:.1} MB total GPU memory across {n_gpu} GPUs (B={})", config.device_batch_size);
+    println!("Model: {:.1}M total params ({:.1}M active), depth={N_LAYER}, d_model={D_MODEL}",
+        num_params() as f64 / 1e6, estimate_flops_per_token() as f64 / 6.0 / 1e6);
+
+    // 2. Initialize weights on each stage (only loading owned layers)
+    for (gpu_idx, stage) in pipeline.stages.iter_mut().enumerate() {
+        stage.stream.context().bind_to_thread().expect("bind CUDA context");
+        if let Some(ref ckpt_path) = config.load_checkpoint {
+            load_checkpoint_staged(&stage.stream, &mut stage.bufs, ckpt_path)?;
+        } else if let Ok(init_path) = std::env::var("INIT_WEIGHTS_PATH") {
+            crate::init_weights::load_weights_from_safetensors(&init_path, &mut stage.bufs, &stage.stream)?;
+        } else {
+            init_weights_staged(&stage.stream, &mut stage.bufs)?;
+        }
+        stage.bufs.pack_wqkv();
+        init_f32_masters(&mut stage.bufs)?;
+        println!("Stage {gpu_idx}: weights initialized");
+    }
+
+    // 3. Precompute RoPE cos/sin on each stage
+    for stage in pipeline.stages.iter_mut() {
+        stage.stream.context().bind_to_thread().expect("bind CUDA context");
+        precompute_rope(&stage.stream, &mut stage.bufs)?;
+    }
+
+    // 4. Calculate grad accumulation steps
+    let tokens_per_micro = config.device_batch_size * SEQ;
+    let grad_accum_steps = config.total_batch_size / tokens_per_micro;
+    let total_batch_size = grad_accum_steps * tokens_per_micro;
+    println!(
+        "Batch: device={}, total={total_batch_size} ({grad_accum_steps} accum steps)",
+        config.device_batch_size,
+    );
+
+    // 5. Open data source (stage 0 receives data)
+    let mut stdin_loader: Option<StdinDataLoader> = None;
+    let mut synth_loader: Option<SyntheticDataLoader> = None;
+    let mut shard_loader: Option<ShardDataLoader> = None;
+    if config.synthetic_data {
+        synth_loader = Some(SyntheticDataLoader::new(config.device_batch_size));
+        println!("Data: synthetic (MFU baseline mode)");
+    } else if config.stream_input {
+        stdin_loader = Some(StdinDataLoader::new(config.device_batch_size));
+        println!("Data: streaming from stdin (feeder, {} batches prefetch)", STDIN_PREFETCH_BATCHES);
+    } else {
+        ensure!(!config.data_dir.is_empty(), "data_dir must be set");
+        let data_path = Path::new(&config.data_dir);
+        let loader = ShardDataLoader::new_train(data_path, config.device_batch_size, config.num_train_shards)?;
+        println!("Data: {} train shards, {} rows total", loader.shards.len(), loader.total_rows());
+        shard_loader = Some(loader);
+    }
+
+    let num_flops_per_token = estimate_flops_per_token();
+
+    // 5b. Allocate pinned host buffers for async H2D (stage 0)
+    let bt = config.device_batch_size * SEQ;
+    let mut pinned_inp = PinnedHostBuffer::new(bt)?;
+    let mut pinned_tgt = PinnedHostBuffer::new(bt)?;
+
+    macro_rules! load_batch {
+        ($inp:expr, $tgt:expr $(,)?) => {
+            if let Some(ref mut sl) = synth_loader {
+                sl.next_batch_into($inp, $tgt);
+            } else if let Some(ref mut sl) = stdin_loader {
+                sl.next_batch_into($inp, $tgt);
+            } else {
+                shard_loader.as_mut().unwrap().next_batch_into($inp, $tgt);
+            }
+        };
+    }
+
+    // 6. Warmup step (un-timed, lets cuBLAS auto-tune on each GPU)
+    println!("Running warmup step...");
+    {
+        load_batch!(pinned_inp.as_mut_slice(), pinned_tgt.as_mut_slice());
+        pipeline.load_data(pinned_inp.as_mut_slice(), pinned_tgt.as_mut_slice())?;
+
+        for stage in pipeline.stages.iter_mut() {
+            stage.bufs.zero_gradients()?;
+        }
+
+        pipeline_forward_backward(&mut pipeline, grad_accum_steps)?;
+        pipeline_optimizer_step(&mut pipeline, 1, 0.0, &config.schedule_cfg)?;
+
+        for stage in pipeline.stages.iter() {
+            stage.stream.synchronize()?;
+        }
+        println!("Warmup complete.");
+    }
+
+    // 7. Training loop
+    //
+    // Each optimizer step:
+    //   1. Zero gradients on all stages
+    //   2. For each micro-step in grad_accum_steps:
+    //      a. Load data onto stage 0 + P2P copy targets to last stage
+    //      b. Forward: stage 0 -> N-1 (P2P send x, x0 between stages)
+    //      c. Backward: stage N-1 -> 0 (P2P send d_x, d_x0 between stages)
+    //      Gradients accumulate across micro-steps.
+    //   3. Optimizer step on all stages
+    //   4. Pack wqkv on all stages
+
+    let t_start = Instant::now();
+    let mut step: usize = 0;
+    let mut total_training_time: f64 = 0.0;
+    let mut smooth_loss: f64 = 0.0;
+    let ema_beta: f64 = 0.9;
+
+    const TIMING_WARMUP_STEPS: usize = 10;
+
+    let mut cooldown_start: Option<usize> = config.max_steps.map(|max| {
+        max.saturating_sub(config.cooldown_steps)
+    });
+    let trigger_path = std::path::Path::new("/tmp/autoresearch_cooldown");
+    let mut last_dt: f64 = 0.0;
+
+    loop {
+        let step_start = Instant::now();
+
+        // File-based cooldown trigger
+        if cooldown_start.is_none() && trigger_path.exists() {
+            println!("[schedule] cooldown triggered via file at step {step}");
+            cooldown_start = Some(step);
+            let _ = std::fs::remove_file(trigger_path);
+        }
+
+        // Stop when cooldown complete
+        if let Some(cs) = cooldown_start {
+            if step >= cs + config.cooldown_steps {
+                break;
+            }
+        }
+
+        // Zero gradients on all stages
+        for stage in pipeline.stages.iter_mut() {
+            stage.bufs.zero_gradients()?;
+        }
+
+        // Zero loss accumulator on last stage
+        {
+            let last = &mut pipeline.stages[n_gpu - 1];
+            last.stream.memset_zeros(&mut last.bufs.loss)?;
+        }
+
+        // ── Gradient accumulation micro-steps ──
+        for _micro in 0..grad_accum_steps {
+            // Load data onto stage 0 + P2P targets to last stage
+            load_batch!(pinned_inp.as_mut_slice(), pinned_tgt.as_mut_slice());
+            pipeline.load_data(pinned_inp.as_mut_slice(), pinned_tgt.as_mut_slice())?;
+
+            // Forward + backward across all stages (gradients accumulate)
+            pipeline_forward_backward(&mut pipeline, grad_accum_steps)?;
+        }
+
+        // ── Optimizer step on all stages ──
+        let progress = wsd_progress(step, cooldown_start, config.cooldown_steps, config.schedule_cfg.warmdown_ratio);
+        pipeline_optimizer_step(&mut pipeline, step + 1, progress, &config.schedule_cfg)?;
+
+        // Pack wqkv on all stages (after optimizer updates w_q/w_k/w_v)
+        for stage in pipeline.stages.iter() {
+            stage.bufs.pack_wqkv();
+        }
+
+        // ── Logging ──
+        let needs_eval = !config.synthetic_data && step > 0 && step % config.eval_interval == 0;
+        let needs_log = step % LOG_INTERVAL == 0 || step <= TIMING_WARMUP_STEPS || needs_eval;
+
+        if needs_log {
+            for stage in pipeline.stages.iter() {
+                stage.stream.synchronize()?;
+            }
+            let dt = step_start.elapsed().as_secs_f64();
+            last_dt = dt;
+
+            // Read loss from last stage
+            let train_loss = pipeline.read_loss()? as f64;
+
+            if step > TIMING_WARMUP_STEPS {
+                total_training_time += dt;
+            }
+
+            if !train_loss.is_nan() {
+                smooth_loss = ema_beta * smooth_loss + (1.0 - ema_beta) * train_loss;
+            }
+            let debiased_loss = if smooth_loss == 0.0 {
+                f64::NAN
+            } else {
+                smooth_loss / (1.0 - ema_beta.powi((step + 1) as i32))
+            };
+
+            let tok_per_sec = total_batch_size as f64 / dt;
+            let mfu = 100.0 * num_flops_per_token as f64 * total_batch_size as f64 / dt / device_peak_flops;
+            let remaining = match cooldown_start {
+                Some(cs) => (cs + config.cooldown_steps).saturating_sub(step),
+                None => config.max_steps.map_or(usize::MAX, |max| max.saturating_sub(step)),
+            };
+            let lr_mult = crate::optim::lr_multiplier(progress, &config.schedule_cfg);
+
+            println!(
+                "step {step:>5} | loss {debiased_loss:.4} | lr {lr_mult:.3} | dt {dt:.3}s | \
+                 tok/s {tok_per_sec:.0} | mfu {mfu:.1}% | {n_gpu}xGPU | steps_left {remaining}",
+            );
+            let _ = std::io::stdout().flush();
+
+            // TODO: pipeline-parallel eval requires gathering weights or running
+            // a single-GPU eval pass. Skipped for now.
+        } else {
+            if step > TIMING_WARMUP_STEPS {
+                total_training_time += last_dt;
+            }
+        }
+
+        step += 1;
+    }
+
+    // ── Final ──
+    for stage in pipeline.stages.iter() {
+        stage.stream.synchronize()?;
+    }
+    println!("Training complete after {step} steps ({n_gpu}-GPU pipeline).");
+
+    // Save per-stage checkpoints (full checkpoint requires weight gathering)
+    if !config.checkpoint_dir.is_empty() {
+        for (i, stage) in pipeline.stages.iter().enumerate() {
+            let dir = Path::new(&config.checkpoint_dir).join(format!("stage_{i}"));
+            fs::create_dir_all(&dir)?;
+            save_checkpoint(&stage.stream, &stage.bufs, step, true, dir.to_str().unwrap())?;
+        }
+    }
+
+    let total_elapsed = t_start.elapsed().as_secs_f64();
+    let total_tokens = step * total_batch_size;
+    let steady_mfu = if total_training_time > 0.0 {
+        100.0
+            * num_flops_per_token as f64
+            * total_batch_size as f64
+            * step.saturating_sub(TIMING_WARMUP_STEPS + 1) as f64
+            / total_training_time
+            / device_peak_flops
+    } else {
+        0.0
+    };
+
+    println!("---");
+    println!("training_seconds: {total_training_time:.1}");
+    println!("total_seconds:    {total_elapsed:.1}");
+    println!("mfu_percent:      {steady_mfu:.2}");
+    println!("total_tokens_M:   {:.1}", total_tokens as f64 / 1e6);
+    println!("num_steps:        {step}");
+    println!("num_params_M:     {:.1}", num_params() as f64 / 1e6);
+    println!("pipeline_stages:  {n_gpu}");
+
+    Ok(())
+}
+
+/// Run forward + backward across all pipeline stages (one micro-step).
+///
+/// Forward: stage 0 -> N-1, with P2P transfer of x and x0 between stages.
+/// Backward: stage N-1 -> 0, with P2P transfer of d_x between stages.
+///
+/// For d_x0 accumulation: each stage zeros its d_x0 and accumulates from its
+/// own layers during backward. For the embedding backward on stage 0 to be
+/// correct, it needs the SUM of d_x0 across all stages. We:
+///   1. Run backward_staged_ex on all stages (stage 0 skips embedding bwd)
+///   2. P2P copy each remote stage's d_x0 into stage 0's d_xn scratch
+///   3. residual_add d_xn into stage 0's d_x0
+///   4. Run embedding_backward on stage 0 with the complete d_x0
+///
+/// Gradients accumulate into each stage's grad buffers. Caller must zero grads
+/// before the first micro-step and call the optimizer after the last.
+fn pipeline_forward_backward(
+    pipeline: &mut crate::pipeline::Pipeline,
+    grad_accum_steps: usize,
+) -> Result<()> {
+    use cudarc::driver::DevicePtr;
+
+    let n = pipeline.n_gpu;
+    let bt = pipeline.stages[0].bufs.batch_size * SEQ;
+    let n_act = bt * D_MODEL;
+    let n_btd = (bt * D_MODEL) as i32;
+
+    // =================================================================
+    //  Forward: stage 0 -> 1 -> ... -> N-1
+    // =================================================================
+    for i in 0..n {
+        {
+            let stage = &mut pipeline.stages[i];
+            crate::forward::forward_staged(&mut stage.bufs, &stage.gemm);
+        }
+
+        if i + 1 < n {
+            pipeline.send_activation(i, i + 1, n_act)?;
+            pipeline.send_x0(i, i + 1, n_act)?;
+            pipeline.stages[i + 1].stream.synchronize()?;
+        }
+    }
+
+    // =================================================================
+    //  Backward: stage N-1 -> ... -> 0
+    // =================================================================
+    if n == 1 {
+        // Single GPU: no d_x0 accumulation needed
+        let stage = &mut pipeline.stages[0];
+        crate::backward::backward_staged_ex(&mut stage.bufs, &stage.gemm, grad_accum_steps, false);
+    } else {
+        // Phase 1: backward on all stages (stage 0 skips embedding bwd)
+        for i in (0..n).rev() {
+            let skip_emb = i == 0;
+            {
+                let stage = &mut pipeline.stages[i];
+                crate::backward::backward_staged_ex(
+                    &mut stage.bufs, &stage.gemm, grad_accum_steps, skip_emb,
+                );
+            }
+
+            // Transfer d_x to previous stage
+            if i > 0 {
+                pipeline.send_gradient(i, i - 1, n_act)?;
+                pipeline.stages[i - 1].stream.synchronize()?;
+            }
+        }
+
+        // Phase 2: accumulate d_x0 from remote stages into stage 0.
+        // P2P copy each stage's d_x0 into stage 0's d_xn scratch, then add.
+        for i in 1..n {
+            // P2P: stage[i].d_x0 -> stage[0].d_xn
+            {
+                let src = &pipeline.stages[i];
+                let dst = &pipeline.stages[0];
+                let src_ptr = {
+                    let (ptr, _) = src.bufs.d_x0.device_ptr(src.bufs.d_x0.stream());
+                    ptr
+                };
+                let dst_ptr = {
+                    let (ptr, _) = dst.bufs.d_xn.device_ptr(dst.bufs.d_xn.stream());
+                    ptr
+                };
+                let nbytes = n_act * std::mem::size_of::<bf16>();
+
+                src.stream.synchronize()?;
+
+                unsafe {
+                    cudarc::driver::sys::cuMemcpyPeerAsync(
+                            dst_ptr,
+                            dst.device.cu_ctx(),
+                            src_ptr,
+                            src.device.cu_ctx(),
+                            nbytes,
+                            dst.stream.cu_stream(),
+                    );
+                }
+            }
+
+            pipeline.stages[0].stream.synchronize()?;
+
+            // d_x0 += d_xn (accumulate remote contribution)
+            {
+                let s0 = &pipeline.stages[0];
+                let stream = s0.stream.cu_stream() as crate::ffi::CudaStream;
+                let d_x0_ptr = {
+                    let (ptr, _) = s0.bufs.d_x0.device_ptr(s0.bufs.d_x0.stream());
+                    ptr
+                };
+                let d_xn_ptr = {
+                    let (ptr, _) = s0.bufs.d_xn.device_ptr(s0.bufs.d_xn.stream());
+                    ptr
+                };
+                unsafe {
+                    crate::ffi::residual_add(
+                        d_x0_ptr as *mut std::ffi::c_void,
+                        d_xn_ptr as *const std::ffi::c_void,
+                        n_btd,
+                        stream,
+                    );
+                }
+            }
+        }
+
+        // Phase 3: embedding backward on stage 0 with complete d_x0
+        crate::backward::embedding_backward(&mut pipeline.stages[0].bufs);
+    }
+
+    Ok(())
+}
+
+/// Run optimizer step on all pipeline stages.
+fn pipeline_optimizer_step(
+    pipeline: &mut crate::pipeline::Pipeline,
+    step: usize,
+    progress: f64,
+    cfg: &crate::optim::ScheduleConfig,
+) -> Result<()> {
+    for stage in pipeline.stages.iter_mut() {
+        crate::optim::optimizer_step(&mut stage.bufs, &stage.gemm, step, progress, cfg);
+        stage.stream.synchronize()?;
+    }
+    Ok(())
+}
+
+/// Initialize weights for a staged buffer manager (only initializes owned layers).
+fn init_weights_staged(stream: &Arc<CudaStream>, bufs: &mut BufferManager) -> Result<()> {
+    let d = D_MODEL;
+    let s = INIT_SCALE * 3.0_f64.sqrt() * (d as f64).powf(-0.5);
+
+    if bufs.has_embedding {
+        let wte_data = randn_bf16(VOCAB * d);
+        stream.memcpy_htod(&wte_data, &mut bufs.wte)?;
+    }
+
+    if bufs.has_head {
+        let lm_data: Vec<bf16> = randn_f32(VOCAB * d)
+            .iter()
+            .map(|&x| bf16::from_f32(x * 0.001))
+            .collect();
+        stream.memcpy_htod(&lm_data, &mut bufs.lm_head)?;
+    }
+
+    // Lambdas are always full-sized (small, N_LAYER entries)
+    let resid_lambdas = vec![bf16::from_f32(1.0); N_LAYER];
+    stream.memcpy_htod(&resid_lambdas, &mut bufs.resid_lambdas)?;
+
+    let x0_lambdas = vec![bf16::from_f32(0.1); N_LAYER];
+    stream.memcpy_htod(&x0_lambdas, &mut bufs.x0_lambdas)?;
+
+    // Per-layer weights (only for owned layers)
+    let mut moe_idx = 0usize;
+    for i in bufs.layer_start..bufs.layer_end {
+        let lw = &mut bufs.layer_weights[i];
+
+        let wq_data = uniform_bf16(d * d, s);
+        stream.memcpy_htod(&wq_data, &mut lw.wq)?;
+        let wk_data = uniform_bf16(d * d, s);
+        stream.memcpy_htod(&wk_data, &mut lw.wk)?;
+        let wv_data = uniform_bf16(d * d, s);
+        stream.memcpy_htod(&wv_data, &mut lw.wv)?;
+
+        if let Some(ref mut wfc) = lw.wfc {
+            let wfc_data = uniform_bf16(MLP_DIM * d, s);
+            stream.memcpy_htod(&wfc_data, wfc)?;
+        }
+
+        if let Some(ref mut ve_w) = lw.ve_weight {
+            let ve_data = uniform_bf16(VOCAB * d, s);
+            stream.memcpy_htod(&ve_data, ve_w)?;
+        }
+
+        // MoE weights (use compact moe_idx)
+        if is_moe_layer(i) && moe_idx < bufs.moe_weights.len() {
+            let mw = &mut bufs.moe_weights[moe_idx];
+
+            let router_data = vec![bf16::ZERO; N_EXPERTS * d];
+            stream.memcpy_htod(&router_data, &mut mw.w_router)?;
+
+            let wfc_data = uniform_bf16(N_EXPERTS * MLP_DIM_E * d, s);
+            stream.memcpy_htod(&wfc_data, &mut mw.expert_wfc)?;
+
+            let wdn_data = vec![bf16::ZERO; N_EXPERTS * d * MLP_DIM_E];
+            stream.memcpy_htod(&wdn_data, &mut mw.expert_wdn)?;
+            moe_idx += 1;
+        }
+    }
+
+    println!("Weights initialized (staged, layers {}..{})", bufs.layer_start, bufs.layer_end);
+    Ok(())
+}
+
+/// Load checkpoint into staged buffers (only loads owned layers).
+fn load_checkpoint_staged(
+    stream: &Arc<CudaStream>,
+    bufs: &mut BufferManager,
+    path: &str,
+) -> Result<()> {
+    use safetensors::SafeTensors;
+
+    let data = fs::read(path)?;
+    let tensors = SafeTensors::deserialize(&data)?;
+
+    let upload = |name: &str, buf: &mut CudaSlice<bf16>| -> Result<()> {
+        let t = tensors.tensor(name)?;
+        let bytes = t.data();
+        let host: &[bf16] = unsafe {
+            std::slice::from_raw_parts(bytes.as_ptr() as *const bf16, bytes.len() / 2)
+        };
+        ensure!(host.len() == buf.len(), "checkpoint tensor {name} size mismatch");
+        stream.memcpy_htod(host, buf)?;
+        Ok(())
+    };
+
+    if bufs.has_embedding {
+        upload("wte.weight", &mut bufs.wte)?;
+    }
+    if bufs.has_head {
+        upload("lm_head.weight", &mut bufs.lm_head)?;
+    }
+    upload("resid_lambdas", &mut bufs.resid_lambdas)?;
+    upload("x0_lambdas", &mut bufs.x0_lambdas)?;
+
+    for i in bufs.layer_start..bufs.layer_end {
+        let lw = &mut bufs.layer_weights[i];
+        let prefix = format!("h.{i}");
+
+        upload(&format!("{prefix}.attn.c_q.weight"), &mut lw.wq)?;
+        upload(&format!("{prefix}.attn.c_k.weight"), &mut lw.wk)?;
+        upload(&format!("{prefix}.attn.c_v.weight"), &mut lw.wv)?;
+        upload(&format!("{prefix}.attn.c_proj.weight"), &mut lw.wo)?;
+
+        if let Some(ref mut wfc) = lw.wfc {
+            upload(&format!("{prefix}.mlp.c_fc.weight"), wfc)?;
+        }
+        if let Some(ref mut wdn) = lw.wdn {
+            upload(&format!("{prefix}.mlp.c_proj.weight"), wdn)?;
+        }
+        if let Some(ref mut ve_w) = lw.ve_weight {
+            upload(&format!("ve.{i}.weight"), ve_w)?;
+        }
+        if let Some(ref mut ve_g) = lw.ve_gate {
+            upload(&format!("{prefix}.attn.ve_gate.weight"), ve_g)?;
+        }
+    }
+
+    // MoE weights (compact moe_idx)
+    let mut moe_idx = 0usize;
+    for i in bufs.layer_start..bufs.layer_end {
+        if is_moe_layer(i) && moe_idx < bufs.moe_weights.len() {
+            let prefix = format!("h.{i}");
+            upload(&format!("{prefix}.moe.router.weight"), &mut bufs.moe_weights[moe_idx].w_router)?;
+
+            // Expert weights are packed — load per-expert and upload
+            let expert_numel = MLP_DIM_E * D_MODEL;
+            for e in 0..N_EXPERTS {
+                let wfc_name = format!("{prefix}.moe.expert.{e}.fc.weight");
+                let wdn_name = format!("{prefix}.moe.expert.{e}.proj.weight");
+                if let (Ok(wfc_t), Ok(wdn_t)) = (tensors.tensor(&wfc_name), tensors.tensor(&wdn_name)) {
+                    let wfc_host: &[bf16] = unsafe {
+                        std::slice::from_raw_parts(wfc_t.data().as_ptr() as *const bf16, expert_numel)
+                    };
+                    let wdn_host: &[bf16] = unsafe {
+                        std::slice::from_raw_parts(wdn_t.data().as_ptr() as *const bf16, expert_numel)
+                    };
+                    let offset = e * expert_numel;
+                    let nbytes = expert_numel * std::mem::size_of::<bf16>();
+                    // Upload into packed buffer at the right offset
+                    unsafe {
+                        cudarc::driver::sys::cuMemcpyHtoDAsync_v2(
+                            dptr(&bufs.moe_weights[moe_idx].expert_wfc) + (offset * std::mem::size_of::<bf16>()) as u64,
+                            wfc_host.as_ptr() as *const std::ffi::c_void,
+                            nbytes,
+                            stream.cu_stream(),
+                        );
+                        cudarc::driver::sys::cuMemcpyHtoDAsync_v2(
+                            dptr(&bufs.moe_weights[moe_idx].expert_wdn) + (offset * std::mem::size_of::<bf16>()) as u64,
+                            wdn_host.as_ptr() as *const std::ffi::c_void,
+                            nbytes,
+                            stream.cu_stream(),
+                        );
+                    }
+                }
+            }
+            moe_idx += 1;
+        }
+    }
+
+    stream.synchronize()?;
+    println!("[checkpoint] loaded {path} (staged, layers {}..{})", bufs.layer_start, bufs.layer_end);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Diagnostic: print per-layer gradient norms (for oracle comparison)
 // ---------------------------------------------------------------------------
 
@@ -1192,8 +1806,8 @@ fn print_gradient_norms(
             bf16_norm(stream, &g.wk),
             bf16_norm(stream, &g.wv),
             bf16_norm(stream, &g.wo),
-            bf16_norm(stream, &g.wfc),
-            bf16_norm(stream, &g.wdn),
+            g.wfc.as_ref().map_or(0.0, |b| bf16_norm(stream, b)),
+            g.wdn.as_ref().map_or(0.0, |b| bf16_norm(stream, b)),
         );
     }
 
@@ -1265,9 +1879,11 @@ fn init_weights(stream: &Arc<CudaStream>, bufs: &mut BufferManager) -> Result<()
         // Wo: zeros (already zeroed by alloc_zeros, but explicit for clarity)
         // lw.wo is already zero from BufferManager::new
 
-        // Wfc: Uniform(-s, s)
-        let wfc_data = uniform_bf16(MLP_DIM * d, s);
-        stream.memcpy_htod(&wfc_data, &mut lw.wfc)?;
+        // Wfc: Uniform(-s, s) — only for dense layers
+        if let Some(ref mut wfc) = lw.wfc {
+            let wfc_data = uniform_bf16(MLP_DIM * d, s);
+            stream.memcpy_htod(&wfc_data, wfc)?;
+        }
 
         // Wdn: zeros (already zeroed)
         // lw.wdn is already zero from BufferManager::new
@@ -1280,6 +1896,23 @@ fn init_weights(stream: &Arc<CudaStream>, bufs: &mut BufferManager) -> Result<()
 
         // VE gate: zeros (already zeroed)
         // lw.ve_gate is already zero from BufferManager::new
+
+        // MoE weights
+        if is_moe_layer(i) && i < bufs.moe_weights.len() {
+            let mw = &mut bufs.moe_weights[i];
+
+            // w_router: zeros (uniform routing at start)
+            let router_data = vec![bf16::ZERO; N_EXPERTS * d];
+            stream.memcpy_htod(&router_data, &mut mw.w_router)?;
+
+            // expert_wfc: Uniform(-s, s)
+            let wfc_data = uniform_bf16(N_EXPERTS * MLP_DIM_E * d, s);
+            stream.memcpy_htod(&wfc_data, &mut mw.expert_wfc)?;
+
+            // expert_wdn: zeros
+            let wdn_data = vec![bf16::ZERO; N_EXPERTS * d * MLP_DIM_E];
+            stream.memcpy_htod(&wdn_data, &mut mw.expert_wdn)?;
+        }
     }
 
     println!("Weights initialized (matching Python scheme)");
@@ -1297,24 +1930,36 @@ fn init_f32_masters(bufs: &mut BufferManager) -> Result<()> {
         );
     }
 
-    // Block matrix weights
-    for i in 0..N_LAYER {
+    // Block matrix weights (only owned layers for pipeline stages)
+    let mut moe_idx = 0usize;
+    for i in bufs.layer_start..bufs.layer_end {
         let lw = &bufs.layer_weights[i];
-        let dd = (D_MODEL * D_MODEL) as i32;
-        let md = (MLP_DIM * D_MODEL) as i32;
+        let dd = lw.wq.len() as i32;
         unsafe {
             crate::ffi::copy_bf16_to_f32(vptr(&lw.wq), dptr(&lw.wq_f32) as *mut f32, dd, stream);
             crate::ffi::copy_bf16_to_f32(vptr(&lw.wk), dptr(&lw.wk_f32) as *mut f32, dd, stream);
             crate::ffi::copy_bf16_to_f32(vptr(&lw.wv), dptr(&lw.wv_f32) as *mut f32, dd, stream);
             crate::ffi::copy_bf16_to_f32(vptr(&lw.wo), dptr(&lw.wo_f32) as *mut f32, dd, stream);
-            crate::ffi::copy_bf16_to_f32(vptr(&lw.wfc), dptr(&lw.wfc_f32) as *mut f32, md, stream);
-            crate::ffi::copy_bf16_to_f32(vptr(&lw.wdn), dptr(&lw.wdn_f32) as *mut f32, md, stream);
+        }
+        if let (Some(wfc), Some(wfc_f32)) = (&lw.wfc, &lw.wfc_f32) {
+            unsafe { crate::ffi::copy_bf16_to_f32(vptr(wfc), dptr(wfc_f32) as *mut f32, wfc.len() as i32, stream); }
+        }
+        if let (Some(wdn), Some(wdn_f32)) = (&lw.wdn, &lw.wdn_f32) {
+            unsafe { crate::ffi::copy_bf16_to_f32(vptr(wdn), dptr(wdn_f32) as *mut f32, wdn.len() as i32, stream); }
         }
         if let (Some(g), Some(g32)) = (&lw.ve_gate, &lw.ve_gate_f32) {
-            let gn = g.len() as i32;
+            unsafe { crate::ffi::copy_bf16_to_f32(vptr(g), dptr(g32) as *mut f32, g.len() as i32, stream); }
+        }
+
+        // MoE weights -> f32 masters (use compact moe_idx)
+        if is_moe_layer(i) {
+            let mw = &bufs.moe_weights[moe_idx];
             unsafe {
-                crate::ffi::copy_bf16_to_f32(vptr(g), dptr(g32) as *mut f32, gn, stream);
+                crate::ffi::copy_bf16_to_f32(vptr(&mw.w_router), dptr(&mw.w_router_f32) as *mut f32, mw.w_router.len() as i32, stream);
+                crate::ffi::copy_bf16_to_f32(vptr(&mw.expert_wfc), dptr(&mw.expert_wfc_f32) as *mut f32, mw.expert_wfc.len() as i32, stream);
+                crate::ffi::copy_bf16_to_f32(vptr(&mw.expert_wdn), dptr(&mw.expert_wdn_f32) as *mut f32, mw.expert_wdn.len() as i32, stream);
             }
+            moe_idx += 1;
         }
     }
 
@@ -1579,18 +2224,62 @@ fn save_checkpoint(
         let lw = &bufs.layer_weights[i];
         let prefix = format!("h.{i}");
 
-        let names_bufs: Vec<(&str, &CudaSlice<bf16>, Vec<usize>)> = vec![
+        // Attention weights (always present)
+        let attn_bufs: Vec<(&str, &CudaSlice<bf16>, Vec<usize>)> = vec![
             ("attn.c_q.weight", &lw.wq, vec![D_MODEL, D_MODEL]),
             ("attn.c_k.weight", &lw.wk, vec![D_MODEL, D_MODEL]),
             ("attn.c_v.weight", &lw.wv, vec![D_MODEL, D_MODEL]),
             ("attn.c_proj.weight", &lw.wo, vec![D_MODEL, D_MODEL]),
-            ("mlp.c_fc.weight", &lw.wfc, vec![MLP_DIM, D_MODEL]),
-            ("mlp.c_proj.weight", &lw.wdn, vec![D_MODEL, MLP_DIM]),
         ];
 
-        for (suffix, buf, shape) in names_bufs {
+        for (suffix, buf, shape) in attn_bufs {
             let bytes = download_f32_from_bf16(buf)?;
             tensors.insert(format!("{prefix}.{suffix}"), (bytes, shape, Dtype::BF16));
+        }
+
+        // Dense MLP weights (only for non-MoE layers)
+        if let Some(ref wfc) = lw.wfc {
+            let bytes = download_f32_from_bf16(wfc)?;
+            tensors.insert(format!("{prefix}.mlp.c_fc.weight"), (bytes, vec![MLP_DIM, D_MODEL], Dtype::BF16));
+        }
+        if let Some(ref wdn) = lw.wdn {
+            let bytes = download_f32_from_bf16(wdn)?;
+            tensors.insert(format!("{prefix}.mlp.c_proj.weight"), (bytes, vec![D_MODEL, MLP_DIM], Dtype::BF16));
+        }
+
+        // MoE weights
+        if is_moe_layer(i) && i < bufs.moe_weights.len() {
+            let mw = &bufs.moe_weights[i];
+
+            // Router
+            let router_bytes = download_f32_from_bf16(&mw.w_router)?;
+            tensors.insert(
+                format!("{prefix}.moe.router.weight"),
+                (router_bytes, vec![N_EXPERTS, D_MODEL], Dtype::BF16),
+            );
+
+            // Per-expert weights — download the packed buffer, then split
+            let expert_numel = MLP_DIM_E * D_MODEL;
+            let all_wfc = download_bf16(&mw.expert_wfc)?;
+            let all_wdn = download_bf16(&mw.expert_wdn)?;
+
+            for e in 0..N_EXPERTS {
+                let offset = e * expert_numel;
+                let wfc_slice = &all_wfc[offset..offset + expert_numel];
+                let wdn_slice = &all_wdn[offset..offset + expert_numel];
+
+                let wfc_bytes: Vec<u8> = wfc_slice.iter().flat_map(|x| x.to_le_bytes()).collect();
+                let wdn_bytes: Vec<u8> = wdn_slice.iter().flat_map(|x| x.to_le_bytes()).collect();
+
+                tensors.insert(
+                    format!("{prefix}.moe.expert.{e}.fc.weight"),
+                    (wfc_bytes, vec![MLP_DIM_E, D_MODEL], Dtype::BF16),
+                );
+                tensors.insert(
+                    format!("{prefix}.moe.expert.{e}.proj.weight"),
+                    (wdn_bytes, vec![D_MODEL, MLP_DIM_E], Dtype::BF16),
+                );
+            }
         }
 
         if let Some(ref ve_w) = lw.ve_weight {
@@ -1673,8 +2362,12 @@ fn load_checkpoint(
         upload(&format!("{prefix}.attn.c_k.weight"), &mut lw.wk)?;
         upload(&format!("{prefix}.attn.c_v.weight"), &mut lw.wv)?;
         upload(&format!("{prefix}.attn.c_proj.weight"), &mut lw.wo)?;
-        upload(&format!("{prefix}.mlp.c_fc.weight"), &mut lw.wfc)?;
-        upload(&format!("{prefix}.mlp.c_proj.weight"), &mut lw.wdn)?;
+        if let Some(ref mut wfc) = lw.wfc {
+            upload(&format!("{prefix}.mlp.c_fc.weight"), wfc)?;
+        }
+        if let Some(ref mut wdn) = lw.wdn {
+            upload(&format!("{prefix}.mlp.c_proj.weight"), wdn)?;
+        }
 
         if let Some(ref mut ve_w) = lw.ve_weight {
             upload(&format!("ve.{i}.weight"), ve_w)?;
@@ -1816,7 +2509,7 @@ mod tests {
         let p = num_params();
         // Scales with depth/dims; sanity-check it's reasonable.
         assert!(p > 1_000_000, "params too low: {p}");
-        assert!(p < 1_000_000_000, "params too high: {p}");
+        assert!(p < 3_000_000_000, "params too high: {p}");
     }
 
     #[test]

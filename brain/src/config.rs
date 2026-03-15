@@ -1,4 +1,4 @@
-pub const VOCAB: usize = 8192;
+pub const VOCAB: usize = 8200;
 pub const SEQ: usize = 32768;
 pub const D_MODEL: usize = 1024;
 pub const N_HEAD: usize = 8;
@@ -25,6 +25,15 @@ pub const WINDOW_SIZES: [usize; N_LAYER] = [
 
 pub const CE_CHUNK: usize = 4096;
 
+pub const N_EXPERTS: usize = 8;
+pub const TOP_K: usize = 2;
+pub const MLP_DIM_E: usize = 25856;
+pub const AUX_LOSS_COEFF: f32 = 0.01;
+
 pub fn has_ve(layer: usize) -> bool {
     matches!(layer, 1 | 3 | 5 | 7)
+}
+
+pub fn is_moe_layer(layer: usize) -> bool {
+    true
 }

@@ -1,3 +1,4 @@
+#include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -101,4 +102,14 @@ extern "C" void embedding_bwd(
     embedding_bwd_kernel<<<D, threads, smem, stream>>>(
         (const unsigned int*)idx, (const __nv_bfloat16*)d_out,
         (__nv_bfloat16*)d_weight, BT, V, D);
+}
+
+extern "C" void embedding_init() {
+    CUdeviceptr dummy;
+    cuMemAlloc(&dummy, 256);
+    embedding_fwd_kernel<<<1, 1, 0, 0>>>(
+        (const unsigned int*)dummy, (const __nv_bfloat16*)dummy,
+        (__nv_bfloat16*)dummy, 0, 1);
+    cudaDeviceSynchronize();
+    cuMemFree(dummy);
 }

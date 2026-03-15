@@ -1,3 +1,4 @@
+#include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -131,4 +132,15 @@ extern "C" void fused_rope_bwd(
         (const __nv_bfloat16*)grad_out, (const __nv_bfloat16*)cos_t,
         (const __nv_bfloat16*)sin_t, (__nv_bfloat16*)grad_in,
         N, T, n_head, hdim);
+}
+
+extern "C" void rope_init() {
+    CUdeviceptr dummy;
+    cuMemAlloc(&dummy, 256);
+    fused_rope_fwd_kernel<<<1, 1, 0, 0>>>(
+        (const __nv_bfloat16*)dummy, (const __nv_bfloat16*)dummy,
+        (const __nv_bfloat16*)dummy, (__nv_bfloat16*)dummy,
+        (uint32_t)0, (uint32_t)1, (uint32_t)1, (uint32_t)2);
+    cudaDeviceSynchronize();
+    cuMemFree(dummy);
 }

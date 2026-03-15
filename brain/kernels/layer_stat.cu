@@ -1,5 +1,11 @@
+#include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+
+// Zero a single f32 slot (replaces cuMemsetD8Async which breaks on cudarc pool-allocated buffers)
+__global__ void stat_zero_f32(float* data, int i) {
+    data[i] = 0.0f;
+}
 
 // ── layer_l2_norm_bf16 ───────────────────────────────────────────────────────
 
@@ -39,7 +45,7 @@ __global__ void inplace_sqrt_f32(float* out, int idx) {
 extern "C" void layer_l2_norm_bf16(
     const __nv_bfloat16* x, int n, float* out, int out_idx, cudaStream_t stream)
 {
-    cudaMemsetAsync(&out[out_idx], 0, sizeof(float), stream);
+    stat_zero_f32<<<1, 1, 0, stream>>>(out, out_idx);
     int block = 256;
     int grid  = min((n + block - 1) / block, 1024);
     layer_l2_norm_bf16_kernel<<<grid, block, 0, stream>>>(x, n, out, out_idx);
@@ -104,4 +110,13 @@ extern "C" void neuron_act_norm_bf16(
     int layer_offset = layer * mlp_dim;
     neuron_act_norm_bf16_kernel<<<mlp_dim, 256, 0, stream>>>(
         h_act, bt, mlp_dim, out, layer_offset);
+}
+
+extern "C" void layer_stat_init() {
+    CUdeviceptr dummy;
+    cuMemAlloc(&dummy, 256);
+    layer_l2_norm_bf16_kernel<<<1, 1, 0, 0>>>(
+        (const __nv_bfloat16*)dummy, 0, (float*)dummy, 0);
+    cudaDeviceSynchronize();
+    cuMemFree(dummy);
 }

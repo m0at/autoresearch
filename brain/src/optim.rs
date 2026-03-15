@@ -35,6 +35,7 @@ const DEFAULT_WEIGHT_DECAY: f64 = 0.2;
 const WTE_WEIGHT_DECAY: f32 = 0.001;
 const LM_HEAD_WEIGHT_DECAY: f32 = 0.01;
 const VE_WEIGHT_DECAY: f32 = 0.003;
+const ROUTER_WEIGHT_DECAY: f32 = 0.01;
 
 // AdamW hyperparams
 const ADAM_BETA1: f32 = 0.8;
@@ -182,8 +183,10 @@ fn muon_weight_decay(progress: f64, cfg: &ScheduleConfig) -> f32 {
 
 /// Run one complete optimizer step on all parameters.
 ///
-/// 1. AdamW for embeddings (wte, lm_head), scalar params (resid/x0 lambdas), VE weights
-/// 2. Muon with Polar Express for block matrix weights (N_LAYER*6) + ve_gate (VE_LAYERS) total
+/// 1. AdamW for embeddings (wte, lm_head), scalar params (resid/x0 lambdas), VE weights, MoE routers
+/// 2. Muon with Polar Express for attention matrices + dense MLP weights
+/// 3. Muon for MoE expert weights (sub-batched per layer, 16 matrices/batch)
+/// 4. Muon for ve_gate (VE_LAYERS)
 ///
 /// Uses backward scratch buffers (d_x, d_x0, d_q, d_k, d_v) as temporary workspace
 /// for the Muon/Polar Express matmuls -- these are unused during the optimizer step.
@@ -205,7 +208,9 @@ pub fn optimizer_step(
     adamw_embeddings(bufs, step, lr_mult, dscale, cfg);
     adamw_scalars(bufs, step, lr_mult, cfg);
     adamw_ve_weights(bufs, step, lr_mult, dscale, cfg);
+    adamw_router_weights(bufs, step, lr_mult, dscale, cfg);
     muon_all_layers(bufs, gemm, lr_mult, momentum, wd, step, cfg);
+    muon_expert_weights(bufs, gemm, lr_mult, momentum, wd, cfg);
     muon_ve_gates(bufs, gemm, lr_mult, momentum, wd, cfg);
 
     // Refresh packed wqkv from updated wq/wk/wv (Muon updates individual bf16 weights)
@@ -244,7 +249,7 @@ fn adamw_embeddings(bufs: &mut BufferManager, step: usize, lr_mult: f32, dscale:
     let stream = bufs.stream.cu_stream() as ffi::CudaStream;
 
     // wte: lr = embedding_lr * dmodel_scale * lr_mult, wd=0.001
-    {
+    if bufs.has_embedding {
         let lr = cfg.embedding_lr as f32 * dscale * lr_mult;
         let n = bufs.wte.len() as i32;
         unsafe {
@@ -258,7 +263,7 @@ fn adamw_embeddings(bufs: &mut BufferManager, step: usize, lr_mult: f32, dscale:
 
     // lm_head: lr = unembedding_lr * dmodel_scale * lr_mult, wd=0.01
     // Python keeps lm_head in f32 — use f32 master + f32 moments, copy back to bf16
-    {
+    if bufs.has_head {
         let lr = cfg.unembedding_lr as f32 * dscale * lr_mult;
         let n = bufs.lm_head.len() as i32;
         unsafe {
@@ -357,7 +362,7 @@ fn adamw_ve_weights(bufs: &mut BufferManager, step: usize, lr_mult: f32, dscale:
     let stream = bufs.stream.cu_stream() as ffi::CudaStream;
 
     let mut ve_idx = 0usize;
-    for layer in 0..N_LAYER {
+    for layer in bufs.layer_start..bufs.layer_end {
         if !has_ve(layer) {
             continue;
         }
@@ -378,6 +383,230 @@ fn adamw_ve_weights(bufs: &mut BufferManager, step: usize, lr_mult: f32, dscale:
         }
 
         ve_idx += 1;
+    }
+}
+
+// ── AdamW: MoE router weights ──────────────────────────────────────────
+//
+// Router: [N_EXPERTS, D_MODEL] per MoE layer. Small matrix, not suitable for Muon.
+// Same LR scale as lm_head (unembedding_lr * dmodel_scale), wd=0.01.
+// f32 master + f32 moments, same pattern as lm_head.
+
+fn adamw_router_weights(bufs: &mut BufferManager, step: usize, lr_mult: f32, dscale: f32, cfg: &ScheduleConfig) {
+    let lr = cfg.unembedding_lr as f32 * dscale * lr_mult;
+    let bc1 = 1.0 - ADAM_BETA1.powi(step as i32);
+    let bc2 = 1.0 - ADAM_BETA2.powi(step as i32);
+    let stream = bufs.stream.cu_stream() as ffi::CudaStream;
+
+    let mut moe_idx = 0usize;
+    for layer in bufs.layer_start..bufs.layer_end {
+        if !is_moe_layer(layer) {
+            continue;
+        }
+
+        let n = (N_EXPERTS * D_MODEL) as i32;
+
+        // Cast bf16 grads to f32 scratch (reuse d_xn, large enough for N_EXPERTS*D_MODEL)
+        let grad_f32 = dptr(&bufs.d_xn) as *mut f32;
+        unsafe {
+            ffi::cast_bf16_to_f32(
+                vptr(&bufs.moe_grads[moe_idx].w_router),
+                grad_f32 as *mut c_void,
+                n, stream,
+            );
+            ffi::adamw_step_f32(
+                dptr(&bufs.moe_weights[moe_idx].w_router_f32) as *mut f32,
+                grad_f32 as *const f32,
+                dptr(&bufs.adamw.moe_router_exp_avg[moe_idx]) as *mut f32,
+                dptr(&bufs.adamw.moe_router_exp_avg_sq[moe_idx]) as *mut f32,
+                lr, ADAM_BETA1, ADAM_BETA2, ADAM_EPS, ROUTER_WEIGHT_DECAY, bc1, bc2, n, stream,
+            );
+            // Copy f32 master back to bf16 compute weight
+            ffi::cast_f32_to_bf16(
+                dptr(&bufs.moe_weights[moe_idx].w_router_f32) as *const c_void,
+                vptr_mut(&bufs.moe_weights[moe_idx].w_router),
+                n, stream,
+            );
+        }
+
+        moe_idx += 1;
+    }
+}
+
+// ── Muon: MoE expert weights (sub-batched per layer) ──────────────────
+//
+// Expert matrices: [MLP_DIM_E, D_MODEL] (tall when MLP_DIM_E > D_MODEL).
+// 8 experts × 2 matrices (wfc_e + wdn_e) = 16 per layer, 30 layers = 480 total.
+// Scratch buffer d_x holds B*T*D = 128M bf16 elems = 128 square matrices max.
+// Process per-layer: 16 matrices/batch, well within scratch capacity.
+//
+// Expert weights are stored contiguously as expert_wfc[N_EXPERTS*MLP_DIM_E, D_MODEL]
+// and expert_wdn[N_EXPERTS*D_MODEL, MLP_DIM_E]. Each expert slice is [MLP_DIM_E, D_MODEL].
+
+fn muon_expert_weights(
+    bufs: &mut BufferManager,
+    gemm: &GemmRunner,
+    lr_mult: f32,
+    momentum: f32,
+    wd: f32,
+    cfg: &ScheduleConfig,
+) {
+    let m = MLP_DIM_E;
+    let n = D_MODEL;
+    let mn = m * n;
+    let tall = m > n;
+    let d = if tall { n } else { m }; // d = min(m, n)
+    let dd = d * d;
+    let matrix_lr_base = cfg.peak_lr as f32 * lr_mult;
+    let aspect_lr = matrix_lr_base * (1.0f64.max(m as f64 / n as f64)).sqrt() as f32;
+    let reduce_cols = if m >= n { 1 } else { 0 };
+    let scratch = dptr(&bufs.muon.scratch) as *mut f32;
+    let stream = bufs.stream.cu_stream() as ffi::CudaStream;
+
+    let x_a_base = dptr(&bufs.d_x);
+    let x_b_base = dptr(&bufs.d_x0);
+    let gram_base = dptr(&bufs.d_q);
+    let sq_base = dptr(&bufs.d_k);
+    let comb_base = dptr(&bufs.d_v);
+
+    // Max matrices that fit in d_x scratch: d_x is [BT, D_MODEL] bf16
+    let scratch_elems = bufs.batch_size * SEQ * D_MODEL; // elements in d_x
+    let max_batch = scratch_elems / mn; // how many [m, n] matrices fit
+    let max_batch = max_batch.min(N_EXPERTS); // cap at N_EXPERTS
+
+    let mut moe_idx = 0usize;
+    for layer in bufs.layer_start..bufs.layer_end {
+        if !is_moe_layer(layer) {
+            continue;
+        }
+
+        let mom_base = moe_idx * N_EXPERTS * 2;
+
+        // Process wfc and wdn separately (sub-batch by matrix type)
+        for (sub, is_wdn) in [(0usize, false), (1usize, true)] {
+            // Sub-batch experts into chunks that fit in scratch
+            let mut e_start = 0;
+            while e_start < N_EXPERTS {
+                let batch = max_batch.min(N_EXPERTS - e_start);
+
+                // ── 1. Nesterov momentum + Frobenius normalize per matrix ──
+                for b in 0..batch {
+                    let e = e_start + b;
+                    let i = e * 2 + sub;
+                    let offset_bytes = (b * mn * 2) as u64;
+                    let x_a_i = (x_a_base + offset_bytes) as *mut c_void;
+                    let x_b_i = (x_b_base + offset_bytes) as *mut c_void;
+
+                    let mom = dptr(&bufs.muon.moe_expert_momentum[mom_base + i]) as *mut f32;
+
+                    let grad = if !is_wdn {
+                        let base = vptr(&bufs.moe_grads[moe_idx].expert_wfc) as u64;
+                        (base + (e * mn * 2) as u64) as *const c_void
+                    } else {
+                        let base = vptr(&bufs.moe_grads[moe_idx].expert_wdn) as u64;
+                        (base + (e * mn * 2) as u64) as *const c_void
+                    };
+
+                    unsafe {
+                        ffi::muon_nesterov_f32buf(mom, grad, x_a_i, momentum, mn as i32, stream);
+                        frob_normalize_bf16(x_a_i as *const c_void, x_b_i, mn as i32, scratch, stream);
+                    }
+                }
+
+                // ── 2. Batched Newton-Schulz iterations ──
+                let mut src_is_b = true;
+
+                for &(ca, cb, cc) in NS_COEFFS[..NS_ITERS].iter() {
+                    unsafe {
+                        if tall {
+                            // A(d,d) = X^T(n,m) @ X(m,n), d=n
+                            ffi::scale_bf16(gram_base as *mut c_void, 0.0, (batch * dd) as i32, stream);
+                            if src_is_b {
+                                gemm.batched_matmul_acc(&bufs.d_x0, &bufs.d_x0, &mut bufs.d_q, m, n, n, batch);
+                            } else {
+                                gemm.batched_matmul_acc(&bufs.d_x, &bufs.d_x, &mut bufs.d_q, m, n, n, batch);
+                            }
+                        } else {
+                            // A(d,d) = X(m,n) @ X^T(n,m), d=m
+                            if src_is_b {
+                                gemm.batched_matmul(&bufs.d_x0, &bufs.d_x0, &mut bufs.d_q, m, m, n, batch);
+                            } else {
+                                gemm.batched_matmul(&bufs.d_x, &bufs.d_x, &mut bufs.d_q, m, m, n, batch);
+                            }
+                        }
+
+                        // A^2(d,d) = A @ A
+                        gemm.batched_matmul_bwd_x(&bufs.d_q, &bufs.d_q, &mut bufs.d_k, d, d, d, batch);
+
+                        // combined = ca*I + cb*A + cc*A^2
+                        ffi::ns_combined_batched(
+                            gram_base as *const c_void,
+                            sq_base as *const c_void,
+                            comb_base as *mut c_void,
+                            ca, cb, cc,
+                            d as i32, batch as i32, stream,
+                        );
+
+                        if tall {
+                            // dst(m,n) = src(m,n) @ combined(n,n)
+                            if src_is_b {
+                                gemm.batched_matmul_bwd_x(&bufs.d_x0, &bufs.d_v, &mut bufs.d_x, m, n, n, batch);
+                            } else {
+                                gemm.batched_matmul_bwd_x(&bufs.d_x, &bufs.d_v, &mut bufs.d_x0, m, n, n, batch);
+                            }
+                        } else {
+                            // dst(m,n) = combined(m,m) @ src(m,n)
+                            if src_is_b {
+                                gemm.batched_matmul_bwd_x(&bufs.d_v, &bufs.d_x0, &mut bufs.d_x, m, m, n, batch);
+                            } else {
+                                gemm.batched_matmul_bwd_x(&bufs.d_v, &bufs.d_x, &mut bufs.d_x0, m, m, n, batch);
+                            }
+                        }
+                    }
+
+                    src_is_b = !src_is_b;
+                }
+
+                let result_base = if src_is_b { x_b_base } else { x_a_base };
+
+                // ── 3. NorMuon + weight update per matrix ──
+                for b in 0..batch {
+                    let e = e_start + b;
+                    let i = e * 2 + sub;
+                    let offset_bytes = (b * mn * 2) as u64;
+                    let result_i = (result_base + offset_bytes) as *mut c_void;
+
+                    let second_mom = dptr(&bufs.muon.moe_expert_second_momentum[mom_base + i]) as *mut f32;
+                    unsafe {
+                        normuon_step_bf16(result_i, second_mom, m as i32, n as i32, reduce_cols, 0.95, scratch, stream);
+                    }
+
+                    let (param, master) = if !is_wdn {
+                        let base_bf16 = vptr_mut(&bufs.moe_weights[moe_idx].expert_wfc) as u64;
+                        let base_f32 = dptr(&bufs.moe_weights[moe_idx].expert_wfc_f32) as u64;
+                        (
+                            (base_bf16 + (e * mn * 2) as u64) as *mut c_void,
+                            (base_f32 + (e * mn * 4) as u64) as *mut f32,
+                        )
+                    } else {
+                        let base_bf16 = vptr_mut(&bufs.moe_weights[moe_idx].expert_wdn) as u64;
+                        let base_f32 = dptr(&bufs.moe_weights[moe_idx].expert_wdn_f32) as u64;
+                        (
+                            (base_bf16 + (e * mn * 2) as u64) as *mut c_void,
+                            (base_f32 + (e * mn * 4) as u64) as *mut f32,
+                        )
+                    };
+
+                    unsafe {
+                        ffi::muon_weight_update_f32(master, param, result_i as *const c_void, aspect_lr, wd, mn as i32, stream);
+                    }
+                }
+
+                e_start += batch;
+            }
+        }
+
+        moe_idx += 1;
     }
 }
 
@@ -418,7 +647,7 @@ fn muon_ve_gates(
 
     let stream = bufs.stream.cu_stream() as ffi::CudaStream;
     let mut ve_idx = 0usize;
-    for layer in 0..N_LAYER {
+    for layer in bufs.layer_start..bufs.layer_end {
         if !has_ve(layer) {
             continue;
         }
@@ -503,11 +732,13 @@ fn muon_ve_gates(
 
 // ── Muon for block matrix weights (batched NS) ─────────────────────────────
 //
-// 6 matrices per layer (wq, wk, wv, wo, wfc, wdn), N_LAYER layers.
+// Attention matrices per layer: wq, wk, wv, wo.
+// Dense MLP layers (non-MoE) also include wfc, wdn.
+// MoE layers: expert matrices handled separately in muon_expert_weights().
 // Grouped by shape for batched Newton-Schulz GEMMs:
 //   - Square (D_MODELxD_MODEL): wq, wk, wv, wo x N_LAYER layers
-//   - Tall   (MLP_DIMxD_MODEL): wfc x N_LAYER layers
-//   - Wide   (D_MODELxMLP_DIM): wdn x N_LAYER layers
+//   - Tall   (MLP_DIMxD_MODEL): wfc x dense layers (empty if all MoE)
+//   - Wide   (D_MODELxMLP_DIM): wdn x dense layers (empty if all MoE)
 //
 // Each group processes:
 //   1. Nesterov momentum per-matrix (into stacked buffer)
@@ -543,24 +774,35 @@ fn muon_all_layers(
     let scratch = dptr(&bufs.muon.scratch) as *mut f32;
 
     // Build groups: square (mat_idx 0..4), tall (mat_idx 4), wide (mat_idx 5)
+    // MoE layers only have attention matrices (0..4); dense wfc/wdn are None.
+    // Momentum indexing: MoE layers have 4 entries, dense layers have 6.
     let mut square_mats: Vec<MatrixInfo> = Vec::with_capacity(N_LAYER * 4);
     let mut tall_mats: Vec<MatrixInfo> = Vec::with_capacity(N_LAYER);
     let mut wide_mats: Vec<MatrixInfo> = Vec::with_capacity(N_LAYER);
 
+    let mut mom_offset = 0usize;
     for layer in 0..N_LAYER {
-        for mat_idx in 0..6usize {
-            let info = MatrixInfo {
-                mom_idx: layer * 6 + mat_idx,
-                layer,
-                mat_idx,
-            };
-            match mat_idx {
-                0..=3 => square_mats.push(info),
-                4 => tall_mats.push(info),
-                5 => wide_mats.push(info),
-                _ => unreachable!(),
+        let moe = is_moe_layer(layer);
+        let n_mats = if moe { 4 } else { 6 };
+        // Only process owned layers; still advance mom_offset for all layers
+        // since momentum arrays are allocated for all N_LAYER (dummies for non-owned).
+        let owned = layer >= bufs.layer_start && layer < bufs.layer_end;
+        if owned {
+            for mat_idx in 0..n_mats {
+                let info = MatrixInfo {
+                    mom_idx: mom_offset + mat_idx,
+                    layer,
+                    mat_idx,
+                };
+                match mat_idx {
+                    0..=3 => square_mats.push(info),
+                    4 => tall_mats.push(info),
+                    5 => wide_mats.push(info),
+                    _ => unreachable!(),
+                }
             }
         }
+        mom_offset += n_mats;
     }
 
     // Process each shape group with batched NS
@@ -569,16 +811,20 @@ fn muon_all_layers(
         D_MODEL, D_MODEL, // square: D_MODEL x D_MODEL
         matrix_lr_base, momentum, wd, scratch,
     );
-    muon_group_batched(
-        bufs, gemm, &tall_mats,
-        MLP_DIM, D_MODEL, // tall: MLP_DIM x D_MODEL
-        matrix_lr_base, momentum, wd, scratch,
-    );
-    muon_group_batched(
-        bufs, gemm, &wide_mats,
-        D_MODEL, MLP_DIM, // wide: D_MODEL x MLP_DIM
-        matrix_lr_base, momentum, wd, scratch,
-    );
+    if !tall_mats.is_empty() {
+        muon_group_batched(
+            bufs, gemm, &tall_mats,
+            MLP_DIM, D_MODEL, // tall: MLP_DIM x D_MODEL
+            matrix_lr_base, momentum, wd, scratch,
+        );
+    }
+    if !wide_mats.is_empty() {
+        muon_group_batched(
+            bufs, gemm, &wide_mats,
+            D_MODEL, MLP_DIM, // wide: D_MODEL x MLP_DIM
+            matrix_lr_base, momentum, wd, scratch,
+        );
+    }
 }
 
 /// Process one shape group: gather -> batch NS -> scatter.
@@ -721,8 +967,8 @@ fn block_weight_ptr(bufs: &BufferManager, layer: usize, mat_idx: usize) -> *mut 
         1 => vptr_mut(&bufs.layer_weights[layer].wk),
         2 => vptr_mut(&bufs.layer_weights[layer].wv),
         3 => vptr_mut(&bufs.layer_weights[layer].wo),
-        4 => vptr_mut(&bufs.layer_weights[layer].wfc),
-        5 => vptr_mut(&bufs.layer_weights[layer].wdn),
+        4 => vptr_mut(bufs.layer_weights[layer].wfc.as_ref().unwrap()),
+        5 => vptr_mut(bufs.layer_weights[layer].wdn.as_ref().unwrap()),
         _ => unreachable!(),
     }
 }
@@ -734,8 +980,8 @@ fn block_master_ptr(bufs: &BufferManager, layer: usize, mat_idx: usize) -> *mut 
         1 => dptr(&bufs.layer_weights[layer].wk_f32) as *mut f32,
         2 => dptr(&bufs.layer_weights[layer].wv_f32) as *mut f32,
         3 => dptr(&bufs.layer_weights[layer].wo_f32) as *mut f32,
-        4 => dptr(&bufs.layer_weights[layer].wfc_f32) as *mut f32,
-        5 => dptr(&bufs.layer_weights[layer].wdn_f32) as *mut f32,
+        4 => dptr(bufs.layer_weights[layer].wfc_f32.as_ref().unwrap()) as *mut f32,
+        5 => dptr(bufs.layer_weights[layer].wdn_f32.as_ref().unwrap()) as *mut f32,
         _ => unreachable!(),
     }
 }
@@ -752,8 +998,8 @@ fn block_grad_ptr(bufs: &BufferManager, layer: usize, mat_idx: usize) -> *mut c_
         1 => vptr_mut(&bufs.layer_grads[layer].wk),
         2 => vptr_mut(&bufs.layer_grads[layer].wv),
         3 => vptr_mut(&bufs.layer_grads[layer].wo),
-        4 => vptr_mut(&bufs.layer_grads[layer].wfc),
-        5 => vptr_mut(&bufs.layer_grads[layer].wdn),
+        4 => vptr_mut(bufs.layer_grads[layer].wfc.as_ref().unwrap()),
+        5 => vptr_mut(bufs.layer_grads[layer].wdn.as_ref().unwrap()),
         _ => unreachable!(),
     }
 }
@@ -896,14 +1142,53 @@ mod tests {
 
     #[test]
     fn momentum_buffer_count() {
-        // 6 matrices per layer (wq, wk, wv, wo, wfc, wdn) x N_LAYER
-        let expected = N_LAYER * 6;
+        // Attention matrices: 4 per layer (wq, wk, wv, wo). Dense MLP adds 2 (wfc, wdn).
+        // MoE layers only have attention in the main momentum vec; expert momentum is separate.
+        let mut expected = 0;
+        for i in 0..N_LAYER {
+            expected += if is_moe_layer(i) { 4 } else { 6 };
+        }
         assert!(expected > 0);
-        assert_eq!(expected, 54); // 9 * 6
+        // All layers are MoE: 30 * 4 = 120
+        assert_eq!(expected, N_LAYER * 4);
+    }
+
+    #[test]
+    fn expert_momentum_buffer_count() {
+        // N_EXPERTS * 2 (wfc_e + wdn_e) per MoE layer
+        let n_moe = (0..N_LAYER).filter(|&i| is_moe_layer(i)).count();
+        let expected = n_moe * N_EXPERTS * 2;
+        // All 30 layers: 30 * 8 * 2 = 480
+        assert_eq!(expected, N_LAYER * N_EXPERTS * 2);
+    }
+
+    #[test]
+    fn router_adamw_buffer_count() {
+        let n_moe = (0..N_LAYER).filter(|&i| is_moe_layer(i)).count();
+        assert_eq!(n_moe, N_LAYER); // all layers are MoE
     }
 
     #[test]
     fn ve_layer_count() {
         assert_eq!(VE_LAYERS.len(), (0..N_LAYER).filter(|&l| has_ve(l)).count());
+    }
+
+    #[test]
+    fn expert_aspect_ratio() {
+        let aspect = (1.0f64.max(MLP_DIM_E as f64 / D_MODEL as f64)).sqrt();
+        // Expert matrices are [MLP_DIM_E, D_MODEL], aspect >= 1.0
+        assert!(aspect >= 1.0);
+    }
+
+    #[test]
+    fn expert_sub_batch_fits_scratch() {
+        // Expert matrices processed N_EXPERTS at a time (wfc or wdn separately)
+        // Each is MLP_DIM_E * D_MODEL bf16 elements
+        let mat_elems = MLP_DIM_E * D_MODEL;
+        // d_x scratch capacity (conservative: assume B=2, T=32768)
+        let scratch_elems = 2 * 32768 * D_MODEL;
+        let max_batch = scratch_elems / mat_elems;
+        assert!(max_batch >= 1,
+            "expert matrix ({} elems) exceeds scratch ({} elems)", mat_elems, scratch_elems);
     }
 }

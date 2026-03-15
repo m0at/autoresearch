@@ -53,7 +53,7 @@ NVCC_FLAGS=(
     # Disable features we don't need to speed up compilation
     -DFLASHATTENTION_DISABLE_FP16
     -DFLASHATTENTION_DISABLE_FP8
-    -DFLASHATTENTION_DISABLE_SPLIT
+    # -DFLASHATTENTION_DISABLE_SPLIT  # needed for backward
     -DFLASHATTENTION_DISABLE_PAGEDKV
     -DFLASHATTENTION_DISABLE_SOFTCAP
     -DFLASHATTENTION_DISABLE_PACKGQA
@@ -67,6 +67,12 @@ NVCC_FLAGS=(
     -I"$HOPPER_DIR"
     -I"$FA_DIR/csrc/flash_attn/src"
 )
+
+# ── Patch: clear stale async CUDA errors before preprocess kernel launch ─────
+# The MoE kernels use <<<>>> which can leave async errors that FA3's
+# CHECK_CUTLASS picks up, causing "Error Internal" on the preprocess kernel.
+sed -i '/CHECK_CUTLASS(cutlass::kernel_launch<PreprocessKernel>(grid_m/i\
+    cudaGetLastError(); // Clear any prior async CUDA errors' "$HOPPER_DIR/flash_bwd_launch_template.h" 2>/dev/null || true
 
 # ── Source files ─────────────────────────────────────────────────────────────
 # Only compile what we need: hdim128, bf16, sm90, no softcap

@@ -1,3 +1,4 @@
+#include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <math_constants.h>
@@ -346,4 +347,14 @@ extern "C" void fused_residual_norm_bwd(
         (const __nv_bfloat16*)lambda_r_ptr, (const __nv_bfloat16*)lambda_0_ptr,
         (__nv_bfloat16*)d_x_out, (__nv_bfloat16*)d_x0,
         d_lambda_r, d_lambda_0, rows, D, eps);
+}
+
+extern "C" void fused_norm_residual_init() {
+    CUdeviceptr dummy;
+    cuMemAlloc(&dummy, 256);
+    fused_residual_add_rms_norm_fwd_kernel<<<1, 32, 0, 0>>>(
+        (__nv_bfloat16*)dummy, (const __nv_bfloat16*)dummy,
+        (__nv_bfloat16*)dummy, (uint32_t)0, (uint32_t)32, 1e-6f);
+    cudaDeviceSynchronize();
+    cuMemFree(dummy);
 }

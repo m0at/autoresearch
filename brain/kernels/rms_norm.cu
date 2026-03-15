@@ -1,3 +1,4 @@
+#include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <math_constants.h>
@@ -110,4 +111,14 @@ extern "C" void fused_rms_norm_bwd(
     fused_rms_norm_bwd_kernel<<<blocks, threads, 0, stream>>>(
         (const __nv_bfloat16*)x, (const __nv_bfloat16*)grad_out,
         (__nv_bfloat16*)grad_in, rows, D, eps);
+}
+
+extern "C" void rms_norm_init() {
+    CUdeviceptr dummy;
+    cuMemAlloc(&dummy, 256);
+    fused_rms_norm_fwd_kernel<<<1, 32, 0, 0>>>(
+        (const __nv_bfloat16*)dummy, (__nv_bfloat16*)dummy,
+        (uint32_t)0, (uint32_t)32, 1e-6f);
+    cudaDeviceSynchronize();
+    cuMemFree(dummy);
 }

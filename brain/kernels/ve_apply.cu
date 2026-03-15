@@ -1,3 +1,4 @@
+#include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -124,4 +125,14 @@ extern "C" void ve_apply_bwd(
         (const __nv_bfloat16*)gate,
         (__nv_bfloat16*)d_ve, (__nv_bfloat16*)d_gate,
         BT, N_KV_HEAD, HEAD_DIM);
+}
+
+extern "C" void ve_apply_init() {
+    CUdeviceptr dummy;
+    cuMemAlloc(&dummy, 256);
+    ve_apply_fwd_kernel<<<1, 1, 0, 0>>>(
+        (__nv_bfloat16*)dummy, (const __nv_bfloat16*)dummy,
+        (const __nv_bfloat16*)dummy, 0, 1, 8);
+    cudaDeviceSynchronize();
+    cuMemFree(dummy);
 }

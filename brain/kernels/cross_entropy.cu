@@ -1,3 +1,4 @@
+#include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <math_constants.h>
@@ -173,4 +174,15 @@ extern "C" void fused_cross_entropy_bwd(
     fused_cross_entropy_bwd_kernel<<<grid, block, smem, stream>>>(
         (const __nv_bfloat16*)logits, (const uint32_t*)targets,
         (const float*)grad_res, (__nv_bfloat16*)grad_in, V, softcap);
+}
+
+extern "C" void cross_entropy_init() {
+    CUdeviceptr dummy;
+    cuMemAlloc(&dummy, 512);
+    size_t smem = (8 + 32) * sizeof(float);
+    fused_cross_entropy_fwd_kernel<<<1, 1, smem, 0>>>(
+        (const __nv_bfloat16*)dummy, (const uint32_t*)dummy,
+        (float*)dummy, (float*)dummy, (uint32_t)8, 0.0f);
+    cudaDeviceSynchronize();
+    cuMemFree(dummy);
 }

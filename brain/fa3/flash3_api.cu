@@ -120,12 +120,19 @@ extern "C" void run_mha_v3(
     params.scale_softmax = softmax_scale;
     params.softcap = (softcap > 0.0f) ? 1.0f : 0.0f;  // FA3 uses 0/1 flag
 
-    // Causal / local attention
-    params.is_causal = (is_causal != 0);
-    params.is_local = (window_size_left >= 0 || window_size_right >= 0);
-    params.window_size_left = window_size_left;
-    params.window_size_right = window_size_right;
-    params.attention_chunk = 0;
+    // Causal / local / window normalization (match official FA3 logic)
+    {
+        int wl = window_size_left;
+        int wr = window_size_right;
+        if (is_causal) { wr = 0; }
+        params.is_causal = (wl < 0 && wr == 0);
+        params.is_local = (wl >= 0 || wr >= 0) && !params.is_causal;
+        if (wl < 0) { wl = (int)seqlen_k - 1; }
+        if (wr < 0) { wr = (int)seqlen_q - 1; }
+        params.window_size_left = wl;
+        params.window_size_right = wr;
+        params.attention_chunk = 0;
+    }
 
     // Data type
     params.is_bf16 = (is_bf16 != 0);
@@ -281,8 +288,7 @@ extern "C" void run_mha_backward_v3(
     params.h_k = h_k;
     params.seqlen_q = seqlen_q;
     params.seqlen_k = seqlen_k;
-    params.seqlen_q_rounded = seqlen_q;
-    params.seqlen_k_rounded = seqlen_k;
+    // seqlen_q_rounded / seqlen_k_rounded set below after kBlockM/kBlockN are known
     params.d = d;
     params.d_rounded = d_rounded;
     params.dv = d;
@@ -293,10 +299,24 @@ extern "C" void run_mha_backward_v3(
     params.scale_softmax = softmax_scale;
     params.softcap = (softcap > 0.0f) ? 1.0f : 0.0f;
 
-    params.is_causal = (is_causal != 0);
-    params.is_local = (window_size_left >= 0 || window_size_right >= 0);
-    params.window_size_left = window_size_left;
-    params.window_size_right = window_size_right;
+    // ── Causal / local / window normalization (must match official FA3 logic) ──
+    // The official API does:
+    //   1) if (is_causal) window_size_right = 0
+    //   2) is_causal = (window_size_left < 0 && window_size_right == 0)
+    //   3) is_local = (wl >= 0 || wr >= 0) && !is_causal
+    //   4) if (wl < 0) wl = seqlen_k - 1
+    //   5) if (wr < 0) wr = seqlen_q - 1
+    // The backward kernel reads window_size_left/right for block range
+    // calculations and mask; negative values cause arithmetic bugs.
+    int wl = window_size_left;
+    int wr = window_size_right;
+    if (is_causal) { wr = 0; }
+    params.is_causal = (wl < 0 && wr == 0);
+    params.is_local = (wl >= 0 || wr >= 0) && !params.is_causal;
+    if (wl < 0) { wl = (int)seqlen_k - 1; }
+    if (wr < 0) { wr = (int)seqlen_q - 1; }
+    params.window_size_left = wl;
+    params.window_size_right = wr;
     params.attention_chunk = 0;
 
     params.is_bf16 = (is_bf16 != 0);
@@ -310,6 +330,18 @@ extern "C" void run_mha_backward_v3(
 
     params.num_splits = 1;
     params.pack_gqa = false;
+    params.page_size = 1;
+
+    // ── seqlen_q/k_rounded: must be rounded up to kBlockM/kBlockN ───────────
+    // For hdim128, bf16, sm90, causal: kBlockM=64, kBlockN=128
+    // For hdim128, bf16, sm90, non-causal: kBlockM=80, kBlockN=128
+    {
+        int kBlockM_bwd = (params.is_causal || params.is_local) ? 64 : 80;
+        int kBlockN_bwd = 128;
+        auto round_multiple = [](int x, int m) { return (x + m - 1) / m * m; };
+        params.seqlen_q_rounded = round_multiple((int)seqlen_q, kBlockM_bwd);
+        params.seqlen_k_rounded = round_multiple((int)seqlen_k, kBlockN_bwd);
+    }
 
     // ── Backward-specific params ────────────────────────────────────────────
     params.do_ptr = dout_ptr;
@@ -344,7 +376,16 @@ extern "C" void run_mha_backward_v3(
     // dk/dv semaphores: nullptr (not GQA, not deterministic-GQA)
 
     params.deterministic = (deterministic != 0);
-    params.dq_accum_split_stride = h * d_rounded;
+    // dq_accum_split_stride: not set in reference code (stays 0 from zero-init).
+    // Only relevant for split-KV backward which we don't use.
+
+    fprintf(stderr, "[FA3 BWD] b=%d h=%d h_k=%d d=%d seqlen_q=%d seqlen_k=%d q_rounded=%d k_rounded=%d causal=%d is_local=%d wl=%d wr=%d num_sm=%d\n",
+        params.b, params.h, params.h_k, params.d, params.seqlen_q, params.seqlen_k,
+        params.seqlen_q_rounded, params.seqlen_k_rounded,
+        params.is_causal, params.is_local, params.window_size_left, params.window_size_right, params.num_sm);
+    fprintf(stderr, "[FA3 BWD] o_ptr=%p do_ptr=%p dq_accum=%p dsoftmax=%p lse=%p lse_log2=%p dq_sem=%p\n",
+        params.o_ptr, params.do_ptr, params.dq_accum_ptr, params.dsoftmax_sum,
+        params.softmax_lse_ptr, params.softmax_lse_log2_ptr, params.dq_semaphore);
 
     run_mha_bwd_<90, cutlass::bfloat16_t, 128, false>(params, stream);
 }

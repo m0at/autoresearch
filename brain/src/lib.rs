@@ -6,5 +6,8 @@ pub mod ffi;
 pub mod forward;
 pub mod gemm;
 pub mod init_weights;
+pub mod nccl;
 pub mod optim;
+pub mod pipeline;
+pub mod sync;
 pub mod train;

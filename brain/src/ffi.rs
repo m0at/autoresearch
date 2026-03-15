@@ -5,6 +5,34 @@ use std::ffi::c_void;
 pub type CudaStream = *mut c_void;
 
 unsafe extern "C" {
+    // ── CUDA runtime init (elementwise.cu) ──────────────────────────────────
+    pub fn cuda_runtime_init(device: i32);
+    pub fn cuda_set_device(device: i32);
+    pub fn moe_dispatch_init();
+    pub fn moe_backward_init();
+    pub fn moe_aux_loss_init();
+
+    // ── Per-module kernel warm-up init functions ────────────────────────────
+    pub fn embedding_init();
+    pub fn relu_sq_init();
+    pub fn rms_norm_init();
+    pub fn fused_norm_residual_init();
+    pub fn rope_init();
+    pub fn cross_entropy_init();
+    pub fn softcap_init();
+    pub fn ve_apply_init();
+    pub fn muon_init();
+    pub fn layer_stat_init();
+    pub fn adamw_init();
+    pub fn residual_scale_init();
+
+    // ── MoE DtoH copy (moe_dispatch.cu) ──────────────────────────────────────
+    pub fn moe_copy_offsets_to_host(
+        expert_offsets_dev: *const c_void,
+        expert_offsets_host: *mut c_void,
+        stream: CudaStream,
+    );
+
     // ── embedding.cu ────────────────────────────────────────────────────────
     pub fn embedding_fwd(
         idx: *const c_void,
@@ -321,6 +349,100 @@ unsafe extern "C" {
         n: u32,
         v: u32,
         softcap: f32,
+        stream: CudaStream,
+    );
+
+    // ── moe_dispatch.cu ────────────────────────────────────────────────────
+    pub fn launch_moe_router_softmax_topk(
+        router_logits: *const c_void,
+        probs: *mut c_void,
+        gates: *mut c_void,
+        indices: *mut c_void,
+        bt: i32,
+        stream: CudaStream,
+    );
+    pub fn launch_moe_permute_tokens(
+        expert_indices: *const c_void,
+        token_perm: *mut c_void,
+        expert_counts: *mut c_void,
+        expert_offsets: *mut c_void,
+        write_scratch: *mut c_void,
+        bt: i32,
+        stream: CudaStream,
+    );
+    pub fn launch_moe_gather_tokens(
+        x: *const c_void,
+        token_perm: *const c_void,
+        x_gathered: *mut c_void,
+        n_dispatch: i32,
+        stream: CudaStream,
+    );
+    pub fn launch_moe_build_inv_perm(
+        token_perm: *const c_void,
+        inv_perm: *mut c_void,
+        n_dispatch: i32,
+        stream: CudaStream,
+    );
+    pub fn launch_moe_scatter(
+        expert_out: *const c_void,
+        gates: *const c_void,
+        inv_perm: *const c_void,
+        output: *mut c_void,
+        bt: i32,
+        stream: CudaStream,
+    );
+
+    // ── moe_aux_loss.cu ──────────────────────────────────────────────────
+    pub fn load_balance_loss_fwd(
+        probs: *const c_void,
+        expert_counts: *const c_void,
+        loss: *mut f32,
+        bt: i32,
+        n_experts: i32,
+        coeff: f32,
+        stream: CudaStream,
+    );
+    pub fn load_balance_loss_bwd(
+        d_probs: *mut c_void,
+        expert_counts: *const c_void,
+        bt: i32,
+        n_experts: i32,
+        coeff: f32,
+        stream: CudaStream,
+    );
+
+    // ── moe_backward.cu ─────────────────────────────────────────────────
+    // moe_router_softmax_topk_bwd(probs, gates, indices, d_gates, d_probs_aux, d_router_logits, bt, stream)
+    pub fn moe_router_softmax_topk_bwd(
+        probs: *const c_void,
+        gates: *const c_void,
+        indices: *const c_void,
+        d_gates: *const c_void,
+        d_probs_aux: *const c_void,
+        d_router_logits: *mut c_void,
+        bt: i32,
+        stream: CudaStream,
+    );
+    // moe_scatter_bwd(expert_output, d_output, gates, expert_indices, token_perm, d_expert_output, d_gate, bt, D, stream)
+    pub fn moe_scatter_bwd(
+        expert_output: *const c_void,
+        d_output: *const c_void,
+        gates: *const c_void,
+        expert_indices: *const c_void,
+        token_perm: *const c_void,
+        d_expert_output: *mut c_void,
+        d_gate: *mut c_void,
+        bt: i32,
+        d_model: i32,
+        stream: CudaStream,
+    );
+    // moe_gather_bwd(d_gathered, token_perm, d_xn, bt, D, stream)
+    pub fn moe_gather_bwd(
+        d_gathered: *const c_void,
+        token_perm: *const c_void,
+        d_xn: *mut c_void,
+        bt: i32,
+        d_model: i32,
         stream: CudaStream,
     );
 

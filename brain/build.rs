@@ -23,6 +23,10 @@ fn main() {
         "rope",
         "cross_entropy",
         "layer_stat",
+        "moe_dispatch",
+        "moe_backward",
+        "moe_aux_loss",
+        "nccl_helper",
     ] {
         build.file(format!("kernels/{kernel}.cu"));
     }
@@ -46,7 +50,17 @@ fn main() {
     println!("cargo:rustc-link-search=native={flash_dir}");
     println!("cargo:rustc-link-lib=static={flash_lib}");
 
-    // Flash-attn depends on CUDA runtime
-    println!("cargo:rustc-link-lib=cudart");
+    // Flash-attn and our CUDA kernels depend on CUDA runtime.
+    // Use static linking to ensure cudart symbols are included.
+    println!("cargo:rustc-link-search=native=/usr/local/cuda/lib64");
+    println!("cargo:rustc-link-lib=static=cudart_static");
+    println!("cargo:rustc-link-lib=dylib=rt");
+    println!("cargo:rustc-link-lib=dylib=dl");
+    println!("cargo:rustc-link-lib=dylib=pthread");
     println!("cargo:rustc-link-lib=stdc++");
+    // Driver API (cuMemsetD8Async, cuMemcpyDtoH, etc.) used in CUDA kernels
+    println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");
+    println!("cargo:rustc-link-lib=dylib=cuda");
+    // NCCL for pipeline parallelism
+    println!("cargo:rustc-link-lib=nccl");
 }

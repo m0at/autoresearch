@@ -290,7 +290,7 @@ impl Pipeline {
 
     /// Read the scalar loss from the last stage (synchronizes that stage's stream).
     /// Returns the mean loss (loss_sum / total_tokens).
-    pub fn read_loss(&self) -> Result<f32> {
+    pub fn read_loss(&self, grad_accum_steps: usize) -> Result<f32> {
         let last = self.n_gpu - 1;
         let stage = &self.stages[last];
 
@@ -306,8 +306,8 @@ impl Pipeline {
             );
         }
 
-        let bt = stage.bufs.batch_size * SEQ;
-        Ok(loss_val[0] / bt as f32)
+        let total_tokens = stage.bufs.batch_size * SEQ * grad_accum_steps;
+        Ok(loss_val[0] / total_tokens as f32)
     }
 
     /// Execute one full training step across all pipeline stages.

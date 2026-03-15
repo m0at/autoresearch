@@ -1378,7 +1378,7 @@ pub fn train_pipeline(config: TrainConfig) -> Result<()> {
             last_dt = dt;
 
             // Read loss from last stage
-            let train_loss = pipeline.read_loss()? as f64;
+            let train_loss = pipeline.read_loss(grad_accum_steps)? as f64;
 
             if step > TIMING_WARMUP_STEPS {
                 total_training_time += dt;

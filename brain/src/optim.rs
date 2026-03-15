@@ -296,31 +296,30 @@ fn adamw_scalars(bufs: &mut BufferManager, step: usize, lr_mult: f32, cfg: &Sche
     let scratch_f32 = dptr(&bufs.d_xn) as *mut f32;
     let stream = bufs.stream.cu_stream() as ffi::CudaStream;
 
+    // Only update lambdas for owned layers to prevent divergence in pipeline mode.
+    // Each process only computes gradients for its own layers; updating non-owned
+    // lambdas with zero gradient corrupts AdamW momentum and drives values to zero.
+    let offset = bufs.layer_start;
+    let n = (bufs.layer_end - bufs.layer_start) as i32;
+    if n <= 0 { return; }
+
     // resid_lambdas: lr = scalar_lr * 0.01 * lr_mult, betas=(0.8, 0.95), wd=0
     {
         let lr = cfg.scalar_lr as f32 * 0.01 * lr_mult;
-        let n = bufs.resid_lambdas.len() as i32;
         let bc1 = 1.0 - ADAM_BETA1.powi(step as i32);
         let bc2 = 1.0 - ADAM_BETA2.powi(step as i32);
 
         unsafe {
-            ffi::cast_bf16_to_f32(
-                vptr(&bufs.resid_lambdas),
-                scratch_f32 as *mut c_void,
-                n, stream,
-            );
-            ffi::adamw_step_f32(
-                scratch_f32,
-                dptr(&bufs.resid_lambdas_grad) as *const f32,
-                dptr(&bufs.adamw.resid_lambdas_exp_avg) as *mut f32,
-                dptr(&bufs.adamw.resid_lambdas_exp_avg_sq) as *mut f32,
-                lr, ADAM_BETA1, ADAM_BETA2, ADAM_EPS, 0.0, bc1, bc2, n, stream,
-            );
-            ffi::cast_f32_to_bf16(
-                scratch_f32 as *const c_void,
-                vptr_mut(&bufs.resid_lambdas),
-                n, stream,
-            );
+            let param_ptr = (vptr(&bufs.resid_lambdas) as *const u8).add(offset * 2) as *const c_void;
+            let param_mut = (vptr_mut(&bufs.resid_lambdas) as *mut u8).add(offset * 2) as *mut c_void;
+            let grad_ptr = (dptr(&bufs.resid_lambdas_grad) as *const f32).add(offset);
+            let m_ptr = (dptr(&bufs.adamw.resid_lambdas_exp_avg) as *mut f32).add(offset);
+            let v_ptr = (dptr(&bufs.adamw.resid_lambdas_exp_avg_sq) as *mut f32).add(offset);
+
+            ffi::cast_bf16_to_f32(param_ptr, scratch_f32 as *mut c_void, n, stream);
+            ffi::adamw_step_f32(scratch_f32, grad_ptr, m_ptr, v_ptr,
+                lr, ADAM_BETA1, ADAM_BETA2, ADAM_EPS, 0.0, bc1, bc2, n, stream);
+            ffi::cast_f32_to_bf16(scratch_f32 as *const c_void, param_mut, n, stream);
         }
     }
 
@@ -329,28 +328,20 @@ fn adamw_scalars(bufs: &mut BufferManager, step: usize, lr_mult: f32, cfg: &Sche
         let lr = cfg.scalar_lr as f32 * lr_mult;
         let x0_beta1: f32 = 0.96;
         let x0_beta2: f32 = 0.95;
-        let n = bufs.x0_lambdas.len() as i32;
         let bc1 = 1.0 - x0_beta1.powi(step as i32);
         let bc2 = 1.0 - x0_beta2.powi(step as i32);
 
         unsafe {
-            ffi::cast_bf16_to_f32(
-                vptr(&bufs.x0_lambdas),
-                scratch_f32 as *mut c_void,
-                n, stream,
-            );
-            ffi::adamw_step_f32(
-                scratch_f32,
-                dptr(&bufs.x0_lambdas_grad) as *const f32,
-                dptr(&bufs.adamw.x0_lambdas_exp_avg) as *mut f32,
-                dptr(&bufs.adamw.x0_lambdas_exp_avg_sq) as *mut f32,
-                lr, x0_beta1, x0_beta2, ADAM_EPS, 0.0, bc1, bc2, n, stream,
-            );
-            ffi::cast_f32_to_bf16(
-                scratch_f32 as *const c_void,
-                vptr_mut(&bufs.x0_lambdas),
-                n, stream,
-            );
+            let param_ptr = (vptr(&bufs.x0_lambdas) as *const u8).add(offset * 2) as *const c_void;
+            let param_mut = (vptr_mut(&bufs.x0_lambdas) as *mut u8).add(offset * 2) as *mut c_void;
+            let grad_ptr = (dptr(&bufs.x0_lambdas_grad) as *const f32).add(offset);
+            let m_ptr = (dptr(&bufs.adamw.x0_lambdas_exp_avg) as *mut f32).add(offset);
+            let v_ptr = (dptr(&bufs.adamw.x0_lambdas_exp_avg_sq) as *mut f32).add(offset);
+
+            ffi::cast_bf16_to_f32(param_ptr, scratch_f32 as *mut c_void, n, stream);
+            ffi::adamw_step_f32(scratch_f32, grad_ptr, m_ptr, v_ptr,
+                lr, x0_beta1, x0_beta2, ADAM_EPS, 0.0, bc1, bc2, n, stream);
+            ffi::cast_f32_to_bf16(scratch_f32 as *const c_void, param_mut, n, stream);
         }
     }
 }

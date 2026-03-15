@@ -1,5 +1,5 @@
 pub const VOCAB: usize = 8200;
-pub const SEQ: usize = 32768;
+pub const SEQ: usize = 131072;
 pub const D_MODEL: usize = 1024;
 pub const N_HEAD: usize = 8;
 pub const N_KV_HEAD: usize = 8;
@@ -15,19 +15,19 @@ pub const INIT_SCALE: f64 = 0.68;
 pub const VE_LAYERS: [usize; 4] = [1, 3, 5, 7];
 
 pub const WINDOW_SIZES: [usize; N_LAYER] = [
-    256, 256, 256, 256, 32768,
-    256, 256, 256, 256, 32768,
-    256, 256, 256, 256, 32768,
-    256, 256, 256, 256, 32768,
-    256, 256, 256, 256, 32768,
-    256, 256, 256, 256, 32768,
+    256, 256, 256, 256, 131072,
+    256, 256, 256, 256, 131072,
+    256, 256, 256, 256, 131072,
+    256, 256, 256, 256, 131072,
+    256, 256, 256, 256, 131072,
+    256, 256, 256, 256, 131072,
 ];
 
 pub const CE_CHUNK: usize = 4096;
 
 pub const N_EXPERTS: usize = 8;
 pub const TOP_K: usize = 2;
-pub const MLP_DIM_E: usize = 25856;
+pub const MLP_DIM_E: usize = 4096;
 pub const AUX_LOSS_COEFF: f32 = 0.01;
 
 pub fn has_ve(layer: usize) -> bool {
